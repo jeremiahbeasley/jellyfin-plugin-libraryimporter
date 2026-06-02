@@ -1,0 +1,9 @@
+bin/
+obj/
+package/
+*.zip
+*.user
+*.suo
+.vs/
+.idea/
+*.pdb

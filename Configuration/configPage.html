@@ -1,0 +1,404 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Library Importer</title>
+    <style>
+        .li-section { margin-bottom: 2em; }
+        .li-section h2 { border-bottom: 1px solid #444; padding-bottom: .3em; }
+        .li-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1em; }
+        .li-field { margin-bottom: .8em; }
+        .li-field label { display: block; font-weight: bold; margin-bottom: .2em; }
+        .li-field input, .li-field textarea, .li-field select { width: 100%; padding: .4em; box-sizing: border-box; }
+        .li-field textarea { height: 80px; resize: vertical; }
+        .li-lib-row { display: flex; align-items: center; gap: 1em; padding: .5em 0; border-bottom: 1px solid #333; }
+        .li-lib-row label { flex: 1; }
+        .li-override-card { background: #1a1a2e; border: 1px solid #444; border-radius: 6px; padding: 1em; margin-bottom: 1em; position: relative; }
+        .li-override-card .li-btn-group { position: absolute; top: .5em; right: .5em; }
+        .li-btn { padding: .4em 1em; cursor: pointer; border: 1px solid #555; border-radius: 4px; background: #2a2a3e; color: #eee; }
+        .li-btn:hover { background: #3a3a5e; }
+        .li-btn-danger { background: #5e2a2a; }
+        .li-btn-danger:hover { background: #7e3a3a; }
+        .li-btn-primary { background: #2a4a5e; }
+        .li-btn-primary:hover { background: #3a6a7e; }
+        .li-modal-overlay { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,.7); z-index: 1000; justify-content: center; align-items: center; }
+        .li-modal-overlay.active { display: flex; }
+        .li-modal { background: #1a1a2e; border: 1px solid #555; border-radius: 8px; padding: 2em; width: 90%; max-width: 700px; max-height: 80vh; overflow-y: auto; }
+        .li-chips { display: flex; flex-wrap: wrap; gap: .3em; margin-top: .3em; }
+        .li-chip { background: #2a4a5e; padding: .2em .6em; border-radius: 3px; font-size: .85em; cursor: pointer; }
+        .li-chip:hover { background: #5e2a2a; }
+        .li-person-row { display: grid; grid-template-columns: 2fr 1fr 2fr auto; gap: .5em; align-items: center; margin-bottom: .3em; }
+        .li-status { padding: .5em; border-radius: 4px; margin-top: 1em; display: none; }
+        .li-status.success { display: block; background: #1a3a1a; border: 1px solid #2a5a2a; }
+        .li-status.error { display: block; background: #3a1a1a; border: 1px solid #5a2a2a; }
+    </style>
+</head>
+<body>
+    <div id="LibraryImporterConfigPage" data-role="page" class="page type-interior pluginConfigurationPage"
+         data-require="emby-input,emby-button,emby-checkbox,emby-select">
+
+        <div data-role="content">
+            <div class="content-primary">
+                <h1>Library Importer</h1>
+
+                <!-- API Keys -->
+                <div class="li-section">
+                    <h2>API Keys</h2>
+                    <div class="li-grid">
+                        <div class="li-field">
+                            <label for="tmdbKey">TMDB API Key</label>
+                            <input id="tmdbKey" type="text" />
+                        </div>
+                        <div class="li-field">
+                            <label for="tvdbKey">TVDB API Key</label>
+                            <input id="tvdbKey" type="text" />
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Libraries -->
+                <div class="li-section">
+                    <h2>Libraries</h2>
+                    <div class="li-field">
+                        <label><input id="dryRun" type="checkbox" /> Dry Run (preview changes without writing)</label>
+                    </div>
+                    <div id="libraryList"></div>
+                </div>
+
+                <button class="li-btn li-btn-primary" onclick="saveConfig()">Save Configuration</button>
+                <div id="saveStatus" class="li-status"></div>
+
+                <!-- Overrides -->
+                <div class="li-section" style="margin-top: 2em;">
+                    <h2>Custom Overrides</h2>
+                    <p>Override metadata for specific titles. Overrides take priority over NFO files and API lookups.</p>
+                    <button class="li-btn li-btn-primary" onclick="showOverrideModal()">Add Override</button>
+                    <div id="overrideList" style="margin-top: 1em;"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Override Edit Modal -->
+    <div id="overrideModal" class="li-modal-overlay">
+        <div class="li-modal">
+            <h2 id="modalTitle">Add Override</h2>
+            <input id="editOverrideId" type="hidden" />
+
+            <div class="li-grid">
+                <div class="li-field">
+                    <label for="ovPath">Path Pattern (matched against folder path)</label>
+                    <input id="ovPath" type="text" placeholder="/mnt/Movies/Movies/Title (Year) - [TmdbId - 12345]" />
+                </div>
+                <div class="li-field">
+                    <label for="ovTitle">Title</label>
+                    <input id="ovTitle" type="text" />
+                </div>
+                <div class="li-field">
+                    <label for="ovYear">Year</label>
+                    <input id="ovYear" type="number" />
+                </div>
+                <div class="li-field">
+                    <label for="ovRating">MPAA Rating</label>
+                    <input id="ovRating" type="text" placeholder="PG-13" />
+                </div>
+            </div>
+
+            <div class="li-grid">
+                <div class="li-field">
+                    <label for="ovTmdb">TMDB ID</label>
+                    <input id="ovTmdb" type="text" />
+                </div>
+                <div class="li-field">
+                    <label for="ovTvdb">TVDB ID</label>
+                    <input id="ovTvdb" type="text" />
+                </div>
+                <div class="li-field">
+                    <label for="ovImdb">IMDB ID</label>
+                    <input id="ovImdb" type="text" placeholder="tt1234567" />
+                </div>
+                <div class="li-field">
+                    <label for="ovCommunityRating">Community Rating</label>
+                    <input id="ovCommunityRating" type="number" step="0.1" min="0" max="10" />
+                </div>
+            </div>
+
+            <div class="li-field">
+                <label for="ovOverview">Overview</label>
+                <textarea id="ovOverview"></textarea>
+            </div>
+
+            <div class="li-grid">
+                <div class="li-field">
+                    <label>Genres (click to remove)</label>
+                    <div style="display:flex;gap:.3em;">
+                        <input id="genreInput" type="text" placeholder="Add genre" style="flex:1;" />
+                        <button class="li-btn" onclick="addChip('genres')">+</button>
+                    </div>
+                    <div id="genres" class="li-chips"></div>
+                </div>
+                <div class="li-field">
+                    <label>Studios (click to remove)</label>
+                    <div style="display:flex;gap:.3em;">
+                        <input id="studioInput" type="text" placeholder="Add studio" style="flex:1;" />
+                        <button class="li-btn" onclick="addChip('studios')">+</button>
+                    </div>
+                    <div id="studios" class="li-chips"></div>
+                </div>
+            </div>
+
+            <div class="li-field">
+                <label>Cast &amp; Crew</label>
+                <div id="peopleList"></div>
+                <button class="li-btn" onclick="addPersonRow()" style="margin-top:.3em;">+ Add Person</button>
+            </div>
+
+            <div style="margin-top: 1.5em; display: flex; gap: 1em;">
+                <button class="li-btn li-btn-primary" onclick="saveOverride()">Save Override</button>
+                <button class="li-btn" onclick="closeOverrideModal()">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const apiBase = ApiClient.serverAddress();
+        const apiHeaders = () => ({ 'Content-Type': 'application/json', 'X-Emby-Token': ApiClient.accessToken() });
+
+        let currentGenres = [];
+        let currentStudios = [];
+
+        // Load config on page show
+        document.querySelector('#LibraryImporterConfigPage').addEventListener('viewshow', loadConfig);
+
+        async function loadConfig() {
+            const config = await ApiClient.getPluginConfiguration('a1b2c3d4-e5f6-7890-abcd-ef1234567890');
+            document.getElementById('tmdbKey').value = config.TmdbApiKey || '';
+            document.getElementById('tvdbKey').value = config.TvdbApiKey || '';
+            document.getElementById('dryRun').checked = config.DryRun || false;
+
+            // Load libraries from server
+            let serverLibs = [];
+            try {
+                const resp = await fetch(apiBase + '/LibraryImporter/Libraries', { headers: apiHeaders() });
+                serverLibs = await resp.json();
+            } catch(e) { console.error('Failed to load libraries', e); }
+
+            const libList = document.getElementById('libraryList');
+            libList.innerHTML = '';
+            const videoTypes = ['movies', 'tvshows', 'homevideos', 'mixed', 'unknown', ''];
+            serverLibs.filter(l => videoTypes.includes(l.CollectionType)).forEach(lib => {
+                const saved = (config.Libraries || []).find(l => l.Name === lib.Name) || {};
+                const row = document.createElement('div');
+                row.className = 'li-lib-row';
+                row.innerHTML = `
+                    <label><input type="checkbox" class="lib-enabled" data-name="${lib.Name}" ${saved.Enabled !== false ? 'checked' : ''} />
+                    <strong>${lib.Name}</strong> (${lib.CollectionType}, ${lib.Paths.length} path${lib.Paths.length !== 1 ? 's' : ''})</label>
+                    <label><input type="checkbox" class="lib-purge" data-name="${lib.Name}" ${saved.PurgeMissing ? 'checked' : ''} /> Purge Missing</label>
+                    <label><input type="checkbox" class="lib-dups" data-name="${lib.Name}" ${saved.AutoDups ? 'checked' : ''} /> Auto Dups</label>
+                `;
+                libList.appendChild(row);
+            });
+
+            renderOverrides(config.Overrides || []);
+        }
+
+        async function saveConfig() {
+            const config = await ApiClient.getPluginConfiguration('a1b2c3d4-e5f6-7890-abcd-ef1234567890');
+            config.TmdbApiKey = document.getElementById('tmdbKey').value;
+            config.TvdbApiKey = document.getElementById('tvdbKey').value;
+            config.DryRun = document.getElementById('dryRun').checked;
+
+            config.Libraries = [];
+            document.querySelectorAll('.lib-enabled').forEach(cb => {
+                const name = cb.dataset.name;
+                const purge = document.querySelector(`.lib-purge[data-name="${name}"]`);
+                const dups = document.querySelector(`.lib-dups[data-name="${name}"]`);
+                config.Libraries.push({
+                    Name: name,
+                    Enabled: cb.checked,
+                    PurgeMissing: purge ? purge.checked : false,
+                    AutoDups: dups ? dups.checked : false
+                });
+            });
+
+            await ApiClient.updatePluginConfiguration('a1b2c3d4-e5f6-7890-abcd-ef1234567890', config);
+            showStatus('saveStatus', 'Configuration saved.', 'success');
+        }
+
+        function renderOverrides(overrides) {
+            const list = document.getElementById('overrideList');
+            list.innerHTML = '';
+            if (overrides.length === 0) {
+                list.innerHTML = '<p style="color:#888;">No overrides configured.</p>';
+                return;
+            }
+            overrides.forEach(ov => {
+                const card = document.createElement('div');
+                card.className = 'li-override-card';
+                const genreStr = (ov.Genres || []).join(', ') || 'none';
+                const peopleStr = (ov.People || []).map(p => `${p.Name} (${p.Type})`).slice(0, 5).join(', ');
+                card.innerHTML = `
+                    <div class="li-btn-group">
+                        <button class="li-btn" onclick="editOverride('${ov.Id}')">Edit</button>
+                        <button class="li-btn li-btn-danger" onclick="deleteOverride('${ov.Id}')">Delete</button>
+                    </div>
+                    <strong>${ov.Title || ov.PathPattern}</strong>
+                    ${ov.Year ? ` (${ov.Year})` : ''}
+                    <br/><small style="color:#888;">${ov.PathPattern}</small>
+                    <br/><small>TMDB: ${ov.TmdbId || '-'} | TVDB: ${ov.TvdbId || '-'} | IMDB: ${ov.ImdbId || '-'}</small>
+                    <br/><small>Genres: ${genreStr}</small>
+                    ${peopleStr ? `<br/><small>People: ${peopleStr}${(ov.People||[]).length > 5 ? '...' : ''}</small>` : ''}
+                `;
+                list.appendChild(card);
+            });
+        }
+
+        function showOverrideModal(entry) {
+            document.getElementById('modalTitle').textContent = entry ? 'Edit Override' : 'Add Override';
+            document.getElementById('editOverrideId').value = entry ? entry.Id : '';
+            document.getElementById('ovPath').value = entry ? entry.PathPattern : '';
+            document.getElementById('ovTitle').value = entry ? entry.Title || '' : '';
+            document.getElementById('ovYear').value = entry ? entry.Year || '' : '';
+            document.getElementById('ovRating').value = entry ? entry.OfficialRating || '' : '';
+            document.getElementById('ovTmdb').value = entry ? entry.TmdbId || '' : '';
+            document.getElementById('ovTvdb').value = entry ? entry.TvdbId || '' : '';
+            document.getElementById('ovImdb').value = entry ? entry.ImdbId || '' : '';
+            document.getElementById('ovCommunityRating').value = entry ? entry.CommunityRating || '' : '';
+            document.getElementById('ovOverview').value = entry ? entry.Overview || '' : '';
+
+            currentGenres = entry ? [...(entry.Genres || [])] : [];
+            currentStudios = entry ? [...(entry.Studios || [])] : [];
+            renderChips('genres', currentGenres);
+            renderChips('studios', currentStudios);
+
+            const peopleList = document.getElementById('peopleList');
+            peopleList.innerHTML = '';
+            if (entry && entry.People) {
+                entry.People.forEach(p => addPersonRow(p));
+            }
+
+            document.getElementById('overrideModal').classList.add('active');
+        }
+
+        function closeOverrideModal() {
+            document.getElementById('overrideModal').classList.remove('active');
+        }
+
+        function addChip(which) {
+            const inputId = which === 'genres' ? 'genreInput' : 'studioInput';
+            const arr = which === 'genres' ? currentGenres : currentStudios;
+            const val = document.getElementById(inputId).value.trim();
+            if (val && !arr.includes(val)) {
+                arr.push(val);
+                renderChips(which, arr);
+            }
+            document.getElementById(inputId).value = '';
+        }
+
+        function renderChips(containerId, arr) {
+            const container = document.getElementById(containerId);
+            container.innerHTML = '';
+            arr.forEach((val, i) => {
+                const chip = document.createElement('span');
+                chip.className = 'li-chip';
+                chip.textContent = val + ' ×';
+                chip.onclick = () => { arr.splice(i, 1); renderChips(containerId, arr); };
+                container.appendChild(chip);
+            });
+        }
+
+        function addPersonRow(person) {
+            const list = document.getElementById('peopleList');
+            const row = document.createElement('div');
+            row.className = 'li-person-row';
+            row.innerHTML = `
+                <input type="text" class="person-name" placeholder="Name" value="${person ? person.Name : ''}" />
+                <select class="person-type">
+                    <option value="Actor" ${person && person.Type === 'Actor' ? 'selected' : ''}>Actor</option>
+                    <option value="Director" ${person && person.Type === 'Director' ? 'selected' : ''}>Director</option>
+                    <option value="Writer" ${person && person.Type === 'Writer' ? 'selected' : ''}>Writer</option>
+                    <option value="Producer" ${person && person.Type === 'Producer' ? 'selected' : ''}>Producer</option>
+                </select>
+                <input type="text" class="person-role" placeholder="Role/Character" value="${person && person.Role ? person.Role : ''}" />
+                <button class="li-btn li-btn-danger" onclick="this.parentElement.remove()">×</button>
+            `;
+            list.appendChild(row);
+        }
+
+        function collectOverrideFromForm() {
+            const people = [];
+            document.querySelectorAll('#peopleList .li-person-row').forEach((row, i) => {
+                const name = row.querySelector('.person-name').value.trim();
+                if (!name) return;
+                people.push({
+                    Name: name,
+                    Type: row.querySelector('.person-type').value,
+                    Role: row.querySelector('.person-role').value.trim() || null,
+                    SortOrder: i
+                });
+            });
+
+            return {
+                PathPattern: document.getElementById('ovPath').value,
+                Title: document.getElementById('ovTitle').value || null,
+                Year: document.getElementById('ovYear').value ? parseInt(document.getElementById('ovYear').value) : null,
+                TmdbId: document.getElementById('ovTmdb').value || null,
+                TvdbId: document.getElementById('ovTvdb').value || null,
+                ImdbId: document.getElementById('ovImdb').value || null,
+                Overview: document.getElementById('ovOverview').value || null,
+                OfficialRating: document.getElementById('ovRating').value || null,
+                CommunityRating: document.getElementById('ovCommunityRating').value ? parseFloat(document.getElementById('ovCommunityRating').value) : null,
+                Genres: [...currentGenres],
+                Studios: [...currentStudios],
+                People: people,
+                IsLocked: true
+            };
+        }
+
+        async function saveOverride() {
+            const entry = collectOverrideFromForm();
+            const editId = document.getElementById('editOverrideId').value;
+
+            try {
+                if (editId) {
+                    await fetch(apiBase + '/LibraryImporter/Overrides/' + editId, {
+                        method: 'PUT', headers: apiHeaders(), body: JSON.stringify(entry)
+                    });
+                } else {
+                    await fetch(apiBase + '/LibraryImporter/Overrides', {
+                        method: 'POST', headers: apiHeaders(), body: JSON.stringify(entry)
+                    });
+                }
+                closeOverrideModal();
+                loadConfig();
+            } catch(e) {
+                alert('Failed to save override: ' + e.message);
+            }
+        }
+
+        async function editOverride(id) {
+            const config = await ApiClient.getPluginConfiguration('a1b2c3d4-e5f6-7890-abcd-ef1234567890');
+            const entry = (config.Overrides || []).find(o => o.Id === id);
+            if (entry) showOverrideModal(entry);
+        }
+
+        async function deleteOverride(id) {
+            if (!confirm('Delete this override?')) return;
+            try {
+                await fetch(apiBase + '/LibraryImporter/Overrides/' + id, {
+                    method: 'DELETE', headers: apiHeaders()
+                });
+                loadConfig();
+            } catch(e) {
+                alert('Failed to delete override: ' + e.message);
+            }
+        }
+
+        function showStatus(elementId, msg, type) {
+            const el = document.getElementById(elementId);
+            el.textContent = msg;
+            el.className = 'li-status ' + type;
+            setTimeout(() => { el.className = 'li-status'; }, 3000);
+        }
+    </script>
+</body>
+</html>
