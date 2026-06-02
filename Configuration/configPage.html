@@ -170,7 +170,7 @@
         document.querySelector('#LibraryImporterConfigPage').addEventListener('viewshow', loadConfig);
 
         async function loadConfig() {
-            const config = await ApiClient.getPluginConfiguration('a1b2c3d4-e5f6-7890-abcd-ef1234567890');
+            const config = await ApiClient.getPluginConfiguration('b74b2d8c-2ab3-411f-9631-c5e8270d7e12');
             document.getElementById('tmdbKey').value = config.TmdbApiKey || '';
             document.getElementById('tvdbKey').value = config.TvdbApiKey || '';
             document.getElementById('dryRun').checked = config.DryRun || false;
@@ -202,7 +202,7 @@
         }
 
         async function saveConfig() {
-            const config = await ApiClient.getPluginConfiguration('a1b2c3d4-e5f6-7890-abcd-ef1234567890');
+            const config = await ApiClient.getPluginConfiguration('b74b2d8c-2ab3-411f-9631-c5e8270d7e12');
             config.TmdbApiKey = document.getElementById('tmdbKey').value;
             config.TvdbApiKey = document.getElementById('tvdbKey').value;
             config.DryRun = document.getElementById('dryRun').checked;
@@ -220,7 +220,7 @@
                 });
             });
 
-            await ApiClient.updatePluginConfiguration('a1b2c3d4-e5f6-7890-abcd-ef1234567890', config);
+            await ApiClient.updatePluginConfiguration('b74b2d8c-2ab3-411f-9631-c5e8270d7e12', config);
             showStatus('saveStatus', 'Configuration saved.', 'success');
         }
 
@@ -376,7 +376,7 @@
         }
 
         async function editOverride(id) {
-            const config = await ApiClient.getPluginConfiguration('a1b2c3d4-e5f6-7890-abcd-ef1234567890');
+            const config = await ApiClient.getPluginConfiguration('b74b2d8c-2ab3-411f-9631-c5e8270d7e12');
             const entry = (config.Overrides || []).find(o => o.Id === id);
             if (entry) showOverrideModal(entry);
         }
