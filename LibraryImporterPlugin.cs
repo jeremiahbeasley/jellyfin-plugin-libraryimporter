@@ -23,7 +23,7 @@ public class LibraryImporterPlugin : BasePlugin<PluginConfiguration>, IHasWebPag
         "Bulk-imports and manages movie/TV metadata from disk, TMDB, and TVDB. " +
         "Supports scheduled scans, custom overrides, duplicate resolution, and orphan purging.";
 
-    public override Guid Id => new("a1b2c3d4-e5f6-7890-abcd-ef1234567890");
+    public override Guid Id => new("b74b2d8c-2ab3-411f-9631-c5e8270d7e12");
 
     public IEnumerable<PluginPageInfo> GetPages()
     {
