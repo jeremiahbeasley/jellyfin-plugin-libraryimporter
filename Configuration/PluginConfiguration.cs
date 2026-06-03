@@ -7,7 +7,6 @@ public class LibraryConfig
     public string Name { get; set; } = string.Empty;
     public bool Enabled { get; set; } = true;
     public bool PurgeMissing { get; set; }
-    public bool AutoDups { get; set; }
 }
 
 public class RunSummary

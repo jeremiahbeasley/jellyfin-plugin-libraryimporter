@@ -2,6 +2,10 @@
 <html lang="en">
 <head>
     <title>Library Importer</title>
+</head>
+<body>
+    <div id="LibraryImporterConfigPage" data-role="page" class="page type-interior pluginConfigurationPage"
+         data-require="emby-input,emby-button,emby-checkbox,emby-select">
     <style>
         /* ============================================================
            Library Importer — projection-booth control desk
@@ -167,16 +171,60 @@
             width: 22px; height: 22px; flex: 0 0 auto; cursor: pointer; accent-color: var(--li-accent);
         }
 
-        /* ---- library roster ---- */
-        #LibraryImporterConfigPage .li-lib {
-            display: flex; align-items: center; gap: var(--li-s3); flex-wrap: wrap;
-            background: var(--li-surface); border: 1px solid var(--li-border-soft);
-            border-radius: var(--li-r-md); padding: var(--li-s2) var(--li-s3); margin-bottom: var(--li-s2);
+        /* ---- library table ---- */
+        #LibraryImporterConfigPage .li-libtable {
+            border: 1px solid var(--li-border-soft); border-radius: var(--li-r-md); overflow: hidden;
         }
-        #LibraryImporterConfigPage .li-lib .li-lib-id { flex: 1 1 16ch; min-width: 14ch; }
-        #LibraryImporterConfigPage .li-lib .li-lib-name { font-weight: 600; }
-        #LibraryImporterConfigPage .li-lib .li-lib-sub { color: var(--li-text-3); font-size: .85em; margin-top: .1em; }
-        #LibraryImporterConfigPage .li-lib .li-lib-opts { display: flex; gap: var(--li-s3); flex-wrap: wrap; }
+        #LibraryImporterConfigPage .li-librow {
+            display: grid; grid-template-columns: minmax(0, 1fr) 96px 96px;
+            align-items: center; gap: var(--li-s2);
+            padding: var(--li-s2) var(--li-s3);
+            border-bottom: 1px solid var(--li-border-soft);
+        }
+        #LibraryImporterConfigPage .li-librow:last-child { border-bottom: 0; }
+        #LibraryImporterConfigPage .li-librow > [role="cell"]:not(.li-lib-id) { justify-self: center; }
+        #LibraryImporterConfigPage .li-libhead {
+            background: var(--li-surface);
+            font-size: .78em; text-transform: uppercase; letter-spacing: .05em;
+            color: var(--li-text-3); font-weight: 600;
+        }
+        #LibraryImporterConfigPage .li-libhead [role="columnheader"]:not(:first-child) { justify-self: center; }
+        #LibraryImporterConfigPage .li-lib-name { font-weight: 600; }
+        #LibraryImporterConfigPage .li-lib-sub { color: var(--li-text-3); font-size: .85em; margin-top: .1em; }
+        @media (max-width: 600px) {
+            #LibraryImporterConfigPage .li-librow { grid-template-columns: minmax(0, 1fr) 60px 60px; }
+            #LibraryImporterConfigPage .li-libhead { font-size: .68em; }
+        }
+
+        /* ---- toggle switch (accessible: real checkbox styled as a switch) ---- */
+        #LibraryImporterConfigPage .li-switch {
+            display: inline-flex; align-items: center; justify-content: center;
+            min-width: 44px; min-height: 44px; cursor: pointer;
+        }
+        #LibraryImporterConfigPage .li-switch input {
+            position: absolute; width: 1px; height: 1px; opacity: 0; margin: 0;
+        }
+        #LibraryImporterConfigPage .li-switch-track {
+            position: relative; width: 42px; height: 24px; border-radius: 999px;
+            background: var(--li-inset); border: 1px solid var(--li-border);
+            transition: background .15s ease, border-color .15s ease;
+        }
+        #LibraryImporterConfigPage .li-switch-thumb {
+            position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; border-radius: 50%;
+            background: var(--li-text-2); transition: transform .15s ease, background .15s ease;
+        }
+        #LibraryImporterConfigPage .li-switch input:checked + .li-switch-track {
+            background: var(--li-accent); border-color: var(--li-accent);
+        }
+        #LibraryImporterConfigPage .li-switch input:checked + .li-switch-track .li-switch-thumb {
+            transform: translateX(20px); background: var(--li-text-on-accent);
+        }
+        #LibraryImporterConfigPage .li-switch input:focus-visible + .li-switch-track {
+            box-shadow: 0 0 0 2px #0a0d10, 0 0 0 5px var(--li-beam);
+        }
+        .layout-tv #LibraryImporterConfigPage .li-switch input:focus-visible + .li-switch-track {
+            box-shadow: 0 0 0 3px #0a0d10, 0 0 0 8px var(--li-beam);
+        }
 
         /* ---- buttons ---- */
         #LibraryImporterConfigPage .li-btn {
@@ -281,10 +329,6 @@
             overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0;
         }
     </style>
-</head>
-<body>
-    <div id="LibraryImporterConfigPage" data-role="page" class="page type-interior pluginConfigurationPage"
-         data-require="emby-input,emby-button,emby-checkbox,emby-select">
 
         <div data-role="content">
             <div class="content-primary">
@@ -487,29 +531,37 @@
                         return;
                     }
 
-                    libList.innerHTML = '';
                     var videoTypes = ['movies', 'tvshows', 'homevideos', 'mixed', 'unknown', ''];
                     var shown = serverLibs.filter(function (l) { return videoTypes.indexOf(l.CollectionType) >= 0; });
-                    if (!shown.length) { libList.innerHTML = '<p class="li-empty">No movie or TV libraries found.</p>'; }
-
-                    shown.forEach(function (lib) {
-                        var saved = (config.Libraries || []).find(function (l) { return l.Name === lib.Name; }) || {};
-                        var n = esc(lib.Name);
-                        var paths = (lib.Paths || []).length;
-                        var row = document.createElement('div');
-                        row.className = 'li-lib';
-                        row.innerHTML =
-                            '<div class="li-lib-id">' +
-                              '<div class="li-lib-name">' + n + '</div>' +
-                              '<div class="li-lib-sub">' + esc(lib.CollectionType || 'unknown') + ' · ' + paths + ' path' + (paths !== 1 ? 's' : '') + '</div>' +
-                            '</div>' +
-                            '<div class="li-lib-opts">' +
-                              chk('lib-enabled', n, saved.Enabled !== false, 'Import') +
-                              chk('lib-purge', n, !!saved.PurgeMissing, 'Purge missing') +
-                              chk('lib-dups', n, !!saved.AutoDups, 'Auto-resolve dups') +
+                    if (!shown.length) {
+                        libList.innerHTML = '<p class="li-empty">No movie or TV libraries found.</p>';
+                    } else {
+                        libList.innerHTML =
+                            '<div class="li-libtable" role="table" aria-label="Libraries">' +
+                              '<div class="li-librow li-libhead" role="row">' +
+                                '<span role="columnheader">Library</span>' +
+                                '<span role="columnheader">Import</span>' +
+                                '<span role="columnheader">Purge</span>' +
+                              '</div>' +
                             '</div>';
-                        libList.appendChild(row);
-                    });
+                        var table = libList.querySelector('.li-libtable');
+                        shown.forEach(function (lib) {
+                            var saved = (config.Libraries || []).find(function (l) { return l.Name === lib.Name; }) || {};
+                            var n = esc(lib.Name);
+                            var paths = (lib.Paths || []).length;
+                            var row = document.createElement('div');
+                            row.className = 'li-librow';
+                            row.setAttribute('role', 'row');
+                            row.innerHTML =
+                                '<div role="cell" class="li-lib-id">' +
+                                  '<div class="li-lib-name">' + n + '</div>' +
+                                  '<div class="li-lib-sub">' + esc(lib.CollectionType || 'unknown') + ' · ' + paths + ' path' + (paths !== 1 ? 's' : '') + '</div>' +
+                                '</div>' +
+                                '<div role="cell">' + toggle('lib-enabled', n, saved.Enabled !== false, 'Import') + '</div>' +
+                                '<div role="cell">' + toggle('lib-purge', n, !!saved.PurgeMissing, 'Purge missing') + '</div>';
+                            table.appendChild(row);
+                        });
+                    }
 
                     renderOverrides(config.Overrides || []);
                     renderLastRun(config.LastRun);
@@ -518,9 +570,12 @@
                 }
             }
 
-            function chk(cls, name, on, label) {
-                return '<label class="li-check"><input type="checkbox" class="' + cls + '" data-name="' + name + '"' +
-                    (on ? ' checked' : '') + ' /><span>' + label + '</span></label>';
+            function toggle(cls, name, on, label) {
+                return '<label class="li-switch">' +
+                    '<input type="checkbox" role="switch" class="' + cls + '" data-name="' + name + '"' +
+                    ' aria-label="' + label + ' — ' + name + '"' + (on ? ' checked' : '') + ' />' +
+                    '<span class="li-switch-track" aria-hidden="true"><span class="li-switch-thumb"></span></span>' +
+                    '</label>';
             }
 
             async function saveConfig() {
@@ -532,11 +587,9 @@
                 document.querySelectorAll('.lib-enabled').forEach(function (cb) {
                     var name = cb.dataset.name;
                     var purge = document.querySelector('.lib-purge[data-name="' + cssAttr(name) + '"]');
-                    var dups = document.querySelector('.lib-dups[data-name="' + cssAttr(name) + '"]');
                     config.Libraries.push({
                         Name: name, Enabled: cb.checked,
-                        PurgeMissing: purge ? purge.checked : false,
-                        AutoDups: dups ? dups.checked : false
+                        PurgeMissing: purge ? purge.checked : false
                     });
                 });
                 await ApiClient.updatePluginConfiguration(pluginId, config);
