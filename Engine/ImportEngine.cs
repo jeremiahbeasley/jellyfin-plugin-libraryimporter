@@ -1,22 +1,34 @@
+using Jellyfin.Data.Enums;
 using Jellyfin.Plugin.LibraryImporter.Configuration;
 using Jellyfin.Plugin.LibraryImporter.Models;
+using MediaBrowser.Controller.Entities;
+using MediaBrowser.Controller.Entities.Movies;
+using MediaBrowser.Controller.Library;
+using MediaBrowser.Model.Entities;
 using Microsoft.Extensions.Logging;
+using JfPersonInfo = MediaBrowser.Controller.Entities.PersonInfo;
 
 namespace Jellyfin.Plugin.LibraryImporter.Engine;
 
+/// <summary>
+/// Path A engine: resolves metadata in bulk (NFO/TMDB/TVDB) exactly as before,
+/// but persists through the supported in-process ILibraryManager API
+/// (CreateItems / UpdateItemsAsync) instead of raw SQL. Jellyfin handles
+/// item IDs, parent/ancestor wiring and cache coherence for us.
+/// </summary>
 public class ImportEngine
 {
-    private readonly DatabaseUpdater _db;
+    private readonly ILibraryManager _lib;
     private readonly TmdbClient _tmdb;
     private readonly TvdbClient _tvdb;
     private readonly ILogger _logger;
     private readonly PluginConfiguration _config;
     private readonly bool _dryRun;
 
-    public ImportEngine(DatabaseUpdater db, TmdbClient tmdb, TvdbClient tvdb,
+    public ImportEngine(ILibraryManager lib, TmdbClient tmdb, TvdbClient tvdb,
         PluginConfiguration config, ILogger logger)
     {
-        _db = db;
+        _lib = lib;
         _tmdb = tmdb;
         _tvdb = tvdb;
         _config = config;
@@ -25,62 +37,85 @@ public class ImportEngine
     }
 
     public async Task<LibraryScanResult> ImportMoviesAsync(
-        string libraryName, List<string> libraryPaths, string physicalRootId,
+        string libraryName, List<string> libraryPaths,
         IProgress<double>? progress, CancellationToken ct)
     {
         var result = new LibraryScanResult { LibraryName = libraryName };
+
+        // Items must be parented under the library's PHYSICAL folder (the one in the
+        // CollectionFolder's PhysicalFolderIds), not the CollectionFolder itself, or
+        // they won't surface in browse. Resolve one physical Folder per library path.
+        var folderByPath = new Dictionary<string, Folder>();
+        foreach (var p in libraryPaths)
+        {
+            if (_lib.FindByPath(p, true) is Folder f) folderByPath[p] = f;
+            else _logger.LogWarning("No physical folder item for path '{Path}' — its movies are skipped", p);
+        }
+
         var movies = DiskScanner.ScanMovies(libraryPaths);
         _logger.LogInformation("Found {Count} movie folders in '{Library}'", movies.Count, libraryName);
+
+        // group persists by parent folder
+        var createByParent = new Dictionary<Guid, (Folder parent, List<BaseItem> items)>();
+        var updateByParent = new Dictionary<Guid, (Folder parent, List<BaseItem> items)>();
+        var pendingPeople = new List<(BaseItem item, List<JfPersonInfo> people)>();
 
         for (var i = 0; i < movies.Count; i++)
         {
             ct.ThrowIfCancellationRequested();
-            progress?.Report((double)i / movies.Count * 100);
+            progress?.Report((double)i / Math.Max(1, movies.Count) * 100);
 
             var (folderPath, videoFile, nfoFile) = movies[i];
             var folderName = Path.GetFileName(folderPath);
 
             try
             {
-                var meta = await ResolveMovieMetadataAsync(folderPath, folderName, nfoFile).ConfigureAwait(false);
-                if (meta is null)
+                var basePath = libraryPaths.FirstOrDefault(p => folderPath.StartsWith(p, StringComparison.Ordinal));
+                if (basePath is null || !folderByPath.TryGetValue(basePath, out var parent))
                 {
                     result.Skipped++;
                     continue;
                 }
 
+                var meta = await ResolveMovieMetadataAsync(folderPath, folderName, nfoFile).ConfigureAwait(false);
+                if (meta is null) { result.Skipped++; continue; }
+
                 meta.FolderPath = folderPath;
                 meta.VideoPath = videoFile;
-
                 ApplyOverride(meta);
 
                 var itemPath = videoFile ?? folderPath;
-                var itemId = IdGenerator.CreateString("Movie", itemPath);
-                var now = DateTime.UtcNow.ToString("o");
+                var itemId = _lib.GetNewItemId(itemPath, typeof(Movie));
 
-                if (!_dryRun)
+                var existing = _lib.GetItemById<Movie>(itemId);
+                var isNew = existing is null;
+                var movie = existing ?? new Movie { Id = itemId };
+
+                PopulateMovie(movie, itemPath, meta, parent);
+
+                // Download a TMDB poster when none exists locally
+                if (!_dryRun && movie.GetImageInfo(ImageType.Primary, 0) is null && !string.IsNullOrEmpty(meta.TmdbId))
                 {
-                    _db.UpsertMovie(itemId, itemPath, physicalRootId, meta, now);
-
-                    var images = DiskScanner.FindImages(folderPath);
-                    if (images.Count > 0)
-                        _db.InsertImages(itemId, images, now);
-
-                    if (!string.IsNullOrEmpty(meta.TmdbId) && !images.Any(im => im.imageType == 0))
+                    var poster = await _tmdb.DownloadPosterAsync(meta.TmdbId, folderPath).ConfigureAwait(false);
+                    if (poster is not null)
                     {
-                        var posterPath = await _tmdb.DownloadPosterAsync(meta.TmdbId, folderPath).ConfigureAwait(false);
-                        if (posterPath is not null)
-                        {
-                            _db.InsertImages(itemId, [(0, posterPath)], now);
-                            result.PostersDownloaded++;
-                        }
+                        movie.SetImage(new ItemImageInfo { Path = poster, Type = ImageType.Primary, DateModified = DateTime.UtcNow }, 0);
+                        result.PostersDownloaded++;
                     }
                 }
 
-                if (_db.GetExistingItem(itemId) is not null)
-                    result.Updated++;
-                else
-                    result.Added++;
+                if (meta.People.Count > 0)
+                    pendingPeople.Add((movie, ToJellyfinPeople(meta.People)));
+
+                var bucket = isNew ? createByParent : updateByParent;
+                if (!bucket.TryGetValue(parent.Id, out var tup))
+                {
+                    tup = (parent, new List<BaseItem>());
+                    bucket[parent.Id] = tup;
+                }
+                tup.items.Add(movie);
+
+                if (isNew) result.Added++; else result.Updated++;
             }
             catch (Exception ex)
             {
@@ -90,124 +125,128 @@ public class ImportEngine
             }
         }
 
-        if (_config.Libraries.FirstOrDefault(l => l.Name == libraryName)?.PurgeMissing == true)
+        if (!_dryRun)
         {
-            result.Purged = _db.PurgeMissingMovies(libraryPaths, _dryRun);
+            foreach (var (_, (parent, items)) in createByParent)
+                _lib.CreateItems(items, parent, ct);
+            foreach (var (_, (parent, items)) in updateByParent)
+                await _lib.UpdateItemsAsync(items, parent, ItemUpdateType.MetadataImport, ct).ConfigureAwait(false);
+
+            foreach (var (item, people) in pendingPeople)
+            {
+                ct.ThrowIfCancellationRequested();
+                try { await _lib.UpdatePeopleAsync(item, people, ct).ConfigureAwait(false); }
+                catch (Exception ex) { _logger.LogWarning(ex, "People update failed for {Name}", item.Name); }
+            }
+
+            if (_config.Libraries.FirstOrDefault(l => l.Name == libraryName)?.PurgeMissing == true)
+                result.Purged = PurgeMissingMovies(folderByPath.Values, ct);
         }
 
         progress?.Report(100);
         return result;
     }
 
-    public async Task<LibraryScanResult> ImportTvAsync(
-        string libraryName, List<string> libraryPaths, string physicalRootId,
+    private int PurgeMissingMovies(IEnumerable<Folder> parents, CancellationToken ct)
+    {
+        var purged = 0;
+        foreach (var parent in parents)
+        {
+            var items = _lib.GetItemList(new InternalItemsQuery
+            {
+                Parent = parent,
+                Recursive = true,
+                IncludeItemTypes = [BaseItemKind.Movie],
+            });
+            foreach (var item in items)
+            {
+                ct.ThrowIfCancellationRequested();
+                if (!string.IsNullOrEmpty(item.Path) && !File.Exists(item.Path))
+                {
+                    _lib.DeleteItem(item, new DeleteOptions { DeleteFileLocation = false });
+                    purged++;
+                }
+            }
+        }
+        return purged;
+    }
+
+    private void PopulateMovie(Movie movie, string itemPath, MovieMetadata meta, Folder parent)
+    {
+        movie.ParentId = parent.Id;
+        movie.Path = itemPath;
+        if (!string.IsNullOrEmpty(meta.Title)) movie.Name = meta.Title;
+        movie.Overview = meta.Overview ?? movie.Overview;
+        movie.Tagline = meta.Tagline ?? movie.Tagline;
+        movie.ProductionYear = meta.ProductionYear ?? meta.Year ?? movie.ProductionYear;
+        movie.PremiereDate = ParseDate(meta.PremiereDate) ?? movie.PremiereDate;
+        movie.CommunityRating = meta.CommunityRating ?? movie.CommunityRating;
+        if (!string.IsNullOrEmpty(meta.OfficialRating)) movie.OfficialRating = meta.OfficialRating;
+        movie.RunTimeTicks = meta.RunTimeTicks ?? movie.RunTimeTicks;
+        if (meta.Genres.Count > 0) movie.Genres = meta.Genres.ToArray();
+        if (meta.Studios.Count > 0) movie.SetStudios(meta.Studios);
+        if (!string.IsNullOrEmpty(meta.TmdbId)) movie.ProviderIds["Tmdb"] = meta.TmdbId;
+        if (!string.IsNullOrEmpty(meta.TvdbId)) movie.ProviderIds["Tvdb"] = meta.TvdbId;
+        if (!string.IsNullOrEmpty(meta.ImdbId)) movie.ProviderIds["Imdb"] = meta.ImdbId;
+
+        // Local images present on disk (poster/backdrop/etc.)
+        foreach (var (imageType, path) in DiskScanner.FindImages(meta.FolderPath!))
+            SetImageIfMissing(movie, imageType, path);
+
+        movie.IsLocked = true; // mirror the script: our metadata wins over future scans
+        if (string.IsNullOrEmpty(movie.PresentationUniqueKey))
+            movie.PresentationUniqueKey = movie.CreatePresentationUniqueKey();
+    }
+
+    private static void SetImageIfMissing(BaseItem item, int imageType, string path)
+    {
+        var type = (ImageType)imageType;
+        if (item.GetImageInfo(type, 0) is not null) return;
+        item.SetImage(new ItemImageInfo { Path = path, Type = type, DateModified = DateTime.UtcNow }, 0);
+    }
+
+    private static List<JfPersonInfo> ToJellyfinPeople(List<Models.PersonInfo> src)
+    {
+        var people = new List<JfPersonInfo>(src.Count);
+        foreach (var p in src)
+        {
+            people.Add(new JfPersonInfo
+            {
+                Name = p.Name,
+                Type = ParseKind(p.Type),
+                Role = p.Role,
+                SortOrder = p.SortOrder,
+            });
+        }
+        return people;
+    }
+
+    private static PersonKind ParseKind(string? type) =>
+        Enum.TryParse<PersonKind>(type, true, out var k) ? k : PersonKind.Actor;
+
+    private static DateTime? ParseDate(string? s) =>
+        DateTime.TryParse(s, out var d) ? d.ToUniversalTime() : null;
+
+    public Task<LibraryScanResult> ImportTvAsync(
+        string libraryName, List<string> libraryPaths,
         IProgress<double>? progress, CancellationToken ct)
     {
-        var result = new LibraryScanResult { LibraryName = libraryName };
-        var shows = DiskScanner.ScanTvShows(libraryPaths);
-        _logger.LogInformation("Found {Count} TV shows in '{Library}'", shows.Count, libraryName);
-
-        for (var i = 0; i < shows.Count; i++)
-        {
-            ct.ThrowIfCancellationRequested();
-            progress?.Report((double)i / shows.Count * 100);
-
-            var (showDir, nfoFile) = shows[i];
-            var folderName = Path.GetFileName(showDir);
-
-            try
-            {
-                var seriesId = IdGenerator.CreateString("Series", showDir);
-                var now = DateTime.UtcNow.ToString("o");
-
-                var meta = await ResolveTvMetadataAsync(showDir, folderName, nfoFile).ConfigureAwait(false);
-                if (meta is null)
-                {
-                    meta = new TvShowMetadata
-                    {
-                        Title = DiskScanner.ExtractTitle(folderName),
-                        Year = DiskScanner.ExtractYear(folderName),
-                        TvdbId = DiskScanner.ExtractTvdbId(folderName),
-                    };
-                }
-
-                if (!_dryRun)
-                {
-                    _db.UpsertSeries(seriesId, showDir, physicalRootId, meta, now);
-
-                    var images = DiskScanner.FindImages(showDir);
-                    if (images.Count > 0)
-                        _db.InsertImages(seriesId, images, now);
-                }
-
-                var isNew = _db.GetExistingItem(seriesId) is null;
-                if (isNew) result.Added++; else result.Updated++;
-
-                // Process seasons and episodes
-                var seasons = DiskScanner.ScanSeasons(showDir);
-                foreach (var (seasonDir, seasonNum) in seasons)
-                {
-                    var seasonId = IdGenerator.CreateString("Season", seasonDir);
-                    if (!_dryRun)
-                    {
-                        _db.UpsertSeason(seasonId, seasonDir, seriesId, seasonNum, meta.Title, now);
-
-                        var seasonImages = FindSeasonImages(showDir, seasonNum);
-                        if (seasonImages.Count > 0)
-                            _db.InsertImages(seasonId, seasonImages, now);
-                    }
-
-                    var episodes = DiskScanner.ScanEpisodes(seasonDir, seasonNum);
-                    foreach (var (epPath, s, e, baseName) in episodes)
-                    {
-                        ct.ThrowIfCancellationRequested();
-                        var epId = IdGenerator.CreateString("Episode", epPath);
-
-                        // Try to parse episode NFO
-                        var epNfo = Path.ChangeExtension(epPath, ".nfo");
-                        var epMeta = File.Exists(epNfo) ? NfoParser.ParseEpisodeNfo(epNfo) : null;
-
-                        if (!_dryRun)
-                        {
-                            _db.UpsertEpisode(epId, epPath, seasonId, seriesId, s, e, meta.Title, epMeta, now);
-
-                            var epImages = FindEpisodeImages(seasonDir, baseName);
-                            if (epImages.Count > 0)
-                                _db.InsertImages(epId, epImages, now);
-                        }
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Failed processing TV show: {Folder}", folderName);
-                result.Failed++;
-                result.Errors.Add($"{folderName}: {ex.Message}");
-            }
-        }
-
-        if (_config.Libraries.FirstOrDefault(l => l.Name == libraryName)?.PurgeMissing == true)
-        {
-            result.Purged = _db.PurgeMissingTv(libraryPaths, _dryRun);
-        }
-
+        // TV migration to the ILibraryManager path lands in the next iteration.
+        _logger.LogInformation("TV library '{Library}' skipped — TV not yet migrated to the API path", libraryName);
         progress?.Report(100);
-        return result;
+        return Task.FromResult(new LibraryScanResult { LibraryName = libraryName });
     }
 
     private async Task<MovieMetadata?> ResolveMovieMetadataAsync(string folderPath, string folderName, string? nfoFile)
     {
-        // 1. Try NFO
         MovieMetadata? meta = null;
         if (nfoFile is not null)
             meta = NfoParser.ParseMovieNfo(nfoFile);
 
-        // 2. Extract IDs from folder name
         var tmdbId = meta?.TmdbId ?? DiskScanner.ExtractTmdbId(folderName);
         var year = meta?.Year ?? DiskScanner.ExtractYear(folderName);
         var title = meta?.Title ?? DiskScanner.ExtractTitle(folderName);
 
-        // 3. TMDB lookup by ID
         if (!string.IsNullOrEmpty(tmdbId))
         {
             var tmdbMeta = await _tmdb.GetMovieAsync(tmdbId).ConfigureAwait(false);
@@ -215,7 +254,6 @@ public class ImportEngine
                 return MergeMetadata(meta, tmdbMeta);
         }
 
-        // 4. TMDB search
         if (!string.IsNullOrEmpty(title))
         {
             var (searchId, mediaType) = await _tmdb.SearchAsync(title, year).ConfigureAwait(false);
@@ -227,7 +265,6 @@ public class ImportEngine
             }
         }
 
-        // 5. TVDB fallback
         if (!string.IsNullOrEmpty(title))
         {
             var (tvdbId, _) = await _tvdb.SearchAsync(title, year).ConfigureAwait(false);
@@ -236,7 +273,6 @@ public class ImportEngine
                 var tvdbMeta = await _tvdb.GetMovieAsync(tvdbId).ConfigureAwait(false);
                 if (tvdbMeta is not null)
                 {
-                    // Convert TVDB MovieMetadata
                     meta ??= new MovieMetadata();
                     meta.Title = tvdbMeta.Title;
                     meta.TvdbId = tvdbMeta.TvdbId;
@@ -253,49 +289,9 @@ public class ImportEngine
         return meta;
     }
 
-    private async Task<TvShowMetadata?> ResolveTvMetadataAsync(string showDir, string folderName, string? nfoFile)
-    {
-        TvShowMetadata? meta = null;
-        if (nfoFile is not null)
-            meta = NfoParser.ParseTvShowNfo(nfoFile);
-
-        var tvdbId = meta?.TvdbId ?? DiskScanner.ExtractTvdbId(folderName);
-        var tmdbId = meta?.TmdbId ?? DiskScanner.ExtractTmdbId(folderName);
-        var title = meta?.Title ?? DiskScanner.ExtractTitle(folderName);
-        var year = meta?.Year ?? DiskScanner.ExtractYear(folderName);
-
-        if (!string.IsNullOrEmpty(tvdbId))
-        {
-            var tvdbMeta = await _tvdb.GetSeriesAsync(tvdbId).ConfigureAwait(false);
-            if (tvdbMeta is not null)
-                return MergeTvMetadata(meta, tvdbMeta);
-        }
-
-        if (!string.IsNullOrEmpty(tmdbId))
-        {
-            var tmdbMeta = await _tmdb.GetTvShowAsync(tmdbId).ConfigureAwait(false);
-            if (tmdbMeta is not null)
-                return MergeTvMetadata(meta, tmdbMeta);
-        }
-
-        if (!string.IsNullOrEmpty(title))
-        {
-            var (searchId, mediaType) = await _tmdb.SearchAsync(title, year).ConfigureAwait(false);
-            if (!string.IsNullOrEmpty(searchId) && mediaType == "tv")
-            {
-                var tmdbMeta = await _tmdb.GetTvShowAsync(searchId).ConfigureAwait(false);
-                if (tmdbMeta is not null)
-                    return MergeTvMetadata(meta, tmdbMeta);
-            }
-        }
-
-        return meta;
-    }
-
     private static MovieMetadata MergeMetadata(MovieMetadata? nfo, MovieMetadata api)
     {
         if (nfo is null) return api;
-        // NFO takes priority for user-edited fields, API fills gaps
         nfo.Title = !string.IsNullOrEmpty(nfo.Title) ? nfo.Title : api.Title;
         nfo.Overview ??= api.Overview;
         nfo.Tagline ??= api.Tagline;
@@ -314,25 +310,6 @@ public class ImportEngine
         if (nfo.Studios.Count == 0) nfo.Studios = api.Studios;
         if (nfo.People.Count == 0) nfo.People = api.People;
         nfo.FromTmdb = api.FromTmdb;
-        return nfo;
-    }
-
-    private static TvShowMetadata MergeTvMetadata(TvShowMetadata? nfo, TvShowMetadata api)
-    {
-        if (nfo is null) return api;
-        nfo.Title = !string.IsNullOrEmpty(nfo.Title) ? nfo.Title : api.Title;
-        nfo.Overview ??= api.Overview;
-        nfo.CommunityRating ??= api.CommunityRating;
-        nfo.OfficialRating ??= api.OfficialRating;
-        nfo.PremiereDate ??= api.PremiereDate;
-        nfo.Year ??= api.Year;
-        nfo.TmdbId ??= api.TmdbId;
-        nfo.TvdbId ??= api.TvdbId;
-        nfo.ImdbId ??= api.ImdbId;
-        nfo.Status ??= api.Status;
-        if (nfo.Genres.Count == 0) nfo.Genres = api.Genres;
-        if (nfo.Studios.Count == 0) nfo.Studios = api.Studios;
-        if (nfo.People.Count == 0) nfo.People = api.People;
         return nfo;
     }
 
@@ -356,24 +333,5 @@ public class ImportEngine
         if (overrideEntry.Studios.Count > 0) meta.Studios = overrideEntry.Studios;
         if (overrideEntry.People.Count > 0) meta.People = overrideEntry.People;
         meta.FromOverride = true;
-    }
-
-    private static List<(int, string)> FindSeasonImages(string showDir, int seasonNum)
-    {
-        var images = new List<(int, string)>();
-        var prefix = seasonNum == 0 ? "season-specials" : $"season{seasonNum:D2}";
-        var posterPath = Path.Combine(showDir, $"{prefix}-poster.jpg");
-        if (File.Exists(posterPath)) images.Add((0, posterPath));
-        var bannerPath = Path.Combine(showDir, $"{prefix}-banner.jpg");
-        if (File.Exists(bannerPath)) images.Add((3, bannerPath));
-        return images;
-    }
-
-    private static List<(int, string)> FindEpisodeImages(string seasonDir, string baseName)
-    {
-        var images = new List<(int, string)>();
-        var thumbPath = Path.Combine(seasonDir, $"{baseName}-thumb.jpg");
-        if (File.Exists(thumbPath)) images.Add((0, thumbPath));
-        return images;
     }
 }

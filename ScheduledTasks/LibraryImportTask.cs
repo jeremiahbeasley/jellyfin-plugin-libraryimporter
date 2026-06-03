@@ -1,6 +1,7 @@
 using Jellyfin.Plugin.LibraryImporter.Configuration;
 using Jellyfin.Plugin.LibraryImporter.Engine;
 using Jellyfin.Plugin.LibraryImporter.Models;
+using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Model.Tasks;
 using Microsoft.Extensions.Logging;
@@ -82,16 +83,7 @@ public class LibraryImportTask : IScheduledTask
         var tmdb = new TmdbClient(httpClient, config.TmdbApiKey, _logger);
         var tvdb = new TvdbClient(httpClient, config.TvdbApiKey, _logger);
 
-        // Find Jellyfin's DB path
-        var dbPath = FindDatabasePath();
-        if (dbPath is null)
-        {
-            _logger.LogError("Could not locate jellyfin.db");
-            return;
-        }
-
-        using var db = new DatabaseUpdater(dbPath, _logger);
-        var engine = new ImportEngine(db, tmdb, tvdb, config, _logger);
+        var engine = new ImportEngine(_libraryManager, tmdb, tvdb, config, _logger);
 
         var totalLibraries = enabledLibraries.Count;
         var completedLibraries = 0;
@@ -108,7 +100,7 @@ public class LibraryImportTask : IScheduledTask
                 continue;
             }
 
-            var (paths, contentType, physicalRootId) = libInfo.Value;
+            var (paths, contentType) = libInfo.Value;
 
             var subProgress = new Progress<double>(pct =>
             {
@@ -119,12 +111,12 @@ public class LibraryImportTask : IScheduledTask
             LibraryScanResult result;
             if (contentType is "tvshows")
             {
-                result = await engine.ImportTvAsync(libConfig.Name, paths, physicalRootId, subProgress, ct)
+                result = await engine.ImportTvAsync(libConfig.Name, paths, subProgress, ct)
                     .ConfigureAwait(false);
             }
             else
             {
-                result = await engine.ImportMoviesAsync(libConfig.Name, paths, physicalRootId, subProgress, ct)
+                result = await engine.ImportMoviesAsync(libConfig.Name, paths, subProgress, ct)
                     .ConfigureAwait(false);
             }
 
@@ -151,7 +143,7 @@ public class LibraryImportTask : IScheduledTask
         _logger.LogInformation("Library import scan complete");
     }
 
-    private (List<string> paths, string contentType, string physicalRootId)? ResolveLibrary(string name)
+    private (List<string> paths, string contentType)? ResolveLibrary(string name)
     {
         var folders = _libraryManager.GetVirtualFolders();
         var folder = folders.FirstOrDefault(f =>
@@ -162,21 +154,6 @@ public class LibraryImportTask : IScheduledTask
         if (paths.Count == 0) return null;
 
         var contentType = folder.CollectionType?.ToString()?.ToLowerInvariant() ?? "movies";
-
-        // Calculate the physical root ID
-        var physicalRootId = IdGenerator.CreateString("Folder", paths[0]);
-        return (paths, contentType, physicalRootId);
-    }
-
-    private static string? FindDatabasePath()
-    {
-        var candidates = new[]
-        {
-            "/var/lib/jellyfin/data/jellyfin.db",
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "jellyfin", "data", "jellyfin.db"),
-        };
-
-        return candidates.FirstOrDefault(File.Exists);
+        return (paths, contentType);
     }
 }

@@ -90,13 +90,18 @@ public class TmdbClient
                 {
                     var bytes = await _http.GetByteArrayAsync(imgUrl).ConfigureAwait(false);
                     await File.WriteAllBytesAsync(dest, bytes).ConfigureAwait(false);
+                    _logger.LogInformation("Downloaded poster for TMDB {Id} -> {Dest}", tmdbId, dest);
                     return dest;
                 }
+            }
+            else
+            {
+                _logger.LogWarning("No poster_path for TMDB {Id}", tmdbId);
             }
         }
         catch (Exception ex)
         {
-            _logger.LogDebug(ex, "Poster download failed for TMDB {Id}", tmdbId);
+            _logger.LogWarning(ex, "Poster download failed for TMDB {Id}", tmdbId);
         }
 
         return null;
