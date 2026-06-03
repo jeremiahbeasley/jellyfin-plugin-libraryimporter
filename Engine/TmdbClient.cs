@@ -60,11 +60,11 @@ public class TmdbClient
             var url = $"{BaseUrl}/search/multi?api_key={_apiKey}&query={query}{yearParam}&language=en-US&page=1";
             var json = await _http.GetFromJsonAsync<JsonElement>(url).ConfigureAwait(false);
 
-            if (json.TryGetProperty("results", out var results) && results.GetArrayLength() > 0)
+            foreach (var first in json.EnumerateArrayOrEmpty("results"))
             {
-                var first = results[0];
-                var id = first.GetProperty("id").GetInt64().ToString();
-                var mediaType = first.TryGetProperty("media_type", out var mt) ? mt.GetString() : "movie";
+                var id = first.GetIdString("id");
+                if (string.IsNullOrEmpty(id)) return (null, null);
+                var mediaType = first.GetStringOrNull("media_type") ?? "movie";
                 return (id, mediaType);
             }
         }
@@ -82,7 +82,7 @@ public class TmdbClient
         {
             var url = $"{BaseUrl}/movie/{tmdbId}?api_key={_apiKey}";
             var json = await _http.GetFromJsonAsync<JsonElement>(url).ConfigureAwait(false);
-            if (json.TryGetProperty("poster_path", out var pp) && pp.GetString() is { } posterPath)
+            if (json.GetStringOrNull("poster_path") is { } posterPath)
             {
                 var imgUrl = ImageBase + posterPath;
                 var dest = Path.Combine(destDir, "poster.jpg");
@@ -115,23 +115,20 @@ public class TmdbClient
         {
             var url = $"{BaseUrl}/tv/{tmdbId}/season/{seasonNum}?api_key={_apiKey}&language=en-US";
             var json = await _http.GetFromJsonAsync<JsonElement>(url).ConfigureAwait(false);
-            if (json.TryGetProperty("episodes", out var eps))
+            foreach (var ep in json.EnumerateArrayOrEmpty("episodes"))
             {
-                foreach (var ep in eps.EnumerateArray())
+                if (!ep.TryGetInt("episode_number", out var en)) continue;
+                var m = new EpisodeMetadata
                 {
-                    if (!ep.TryGetProperty("episode_number", out var enEl) || !enEl.TryGetInt32(out var en)) continue;
-                    var m = new EpisodeMetadata
-                    {
-                        SeasonNumber = seasonNum,
-                        EpisodeNumber = en,
-                        Title = ep.TryGetProperty("name", out var n) ? n.GetString() ?? "" : "",
-                        Overview = ep.TryGetProperty("overview", out var ov) ? ov.GetString() : null,
-                        PremiereDate = ep.TryGetProperty("air_date", out var ad) ? ad.GetString() : null,
-                    };
-                    if (ep.TryGetProperty("vote_average", out var va) && va.TryGetDouble(out var r)) m.CommunityRating = (float)r;
-                    if (ep.TryGetProperty("runtime", out var rt) && rt.TryGetInt32(out var mins)) m.RunTimeTicks = mins * 600_000_000L;
-                    map[en] = m;
-                }
+                    SeasonNumber = seasonNum,
+                    EpisodeNumber = en,
+                    Title = ep.GetStringOrNull("name") ?? "",
+                    Overview = ep.GetStringOrNull("overview"),
+                    PremiereDate = ep.GetStringOrNull("air_date"),
+                };
+                if (ep.TryGetDoubleSafe("vote_average", out var r)) m.CommunityRating = (float)r;
+                if (ep.TryGetInt("runtime", out var mins)) m.RunTimeTicks = mins * 600_000_000L;
+                map[en] = m;
             }
         }
         catch (Exception ex)
@@ -145,19 +142,19 @@ public class TmdbClient
     {
         var meta = new MovieMetadata
         {
-            Title = json.TryGetProperty("title", out var t) ? t.GetString() ?? "" : "",
-            OriginalTitle = json.TryGetProperty("original_title", out var ot) ? ot.GetString() : null,
-            Overview = json.TryGetProperty("overview", out var ov) ? ov.GetString() : null,
-            Tagline = json.TryGetProperty("tagline", out var tl) ? tl.GetString() : null,
+            Title = json.GetStringOrNull("title") ?? "",
+            OriginalTitle = json.GetStringOrNull("original_title"),
+            Overview = json.GetStringOrNull("overview"),
+            Tagline = json.GetStringOrNull("tagline"),
             TmdbId = tmdbId,
             FromTmdb = true,
-            PremiereDate = json.TryGetProperty("release_date", out var rd) ? rd.GetString() : null,
+            PremiereDate = json.GetStringOrNull("release_date"),
         };
 
-        if (json.TryGetProperty("vote_average", out var va) && va.TryGetDouble(out var rating))
+        if (json.TryGetDoubleSafe("vote_average", out var rating))
             meta.CommunityRating = (float)rating;
 
-        if (json.TryGetProperty("runtime", out var rt) && rt.TryGetInt32(out var mins))
+        if (json.TryGetInt("runtime", out var mins))
             meta.RunTimeTicks = mins * 600_000_000L;
 
         if (!string.IsNullOrEmpty(meta.PremiereDate) && meta.PremiereDate.Length >= 4 &&
@@ -167,27 +164,20 @@ public class TmdbClient
             meta.ProductionYear = y;
         }
 
-        if (json.TryGetProperty("imdb_id", out var imdb))
-            meta.ImdbId = imdb.GetString();
+        meta.ImdbId = json.GetStringOrNull("imdb_id");
 
-        if (json.TryGetProperty("genres", out var genres))
-        {
-            foreach (var g in genres.EnumerateArray())
-                if (g.TryGetProperty("name", out var gn))
-                    meta.Genres.Add(gn.GetString()!);
-        }
+        foreach (var g in json.EnumerateArrayOrEmpty("genres"))
+            if (g.GetStringOrNull("name") is { } gn)
+                meta.Genres.Add(gn);
 
-        if (json.TryGetProperty("production_companies", out var studios))
-        {
-            foreach (var s in studios.EnumerateArray())
-                if (s.TryGetProperty("name", out var sn))
-                    meta.Studios.Add(sn.GetString()!);
-        }
+        foreach (var s in json.EnumerateArrayOrEmpty("production_companies"))
+            if (s.GetStringOrNull("name") is { } sn)
+                meta.Studios.Add(sn);
 
-        if (json.TryGetProperty("poster_path", out var poster) && poster.GetString() is { } pp)
+        if (json.GetStringOrNull("poster_path") is { } pp)
             meta.PosterUrl = ImageBase + pp;
 
-        if (json.TryGetProperty("backdrop_path", out var backdrop) && backdrop.GetString() is { } bp)
+        if (json.GetStringOrNull("backdrop_path") is { } bp)
             meta.BackdropUrl = ImageBase + bp;
 
         if (json.TryGetProperty("credits", out var credits))
@@ -200,31 +190,29 @@ public class TmdbClient
     {
         var meta = new TvShowMetadata
         {
-            Title = json.TryGetProperty("name", out var t) ? t.GetString() ?? "" : "",
-            Overview = json.TryGetProperty("overview", out var ov) ? ov.GetString() : null,
+            Title = json.GetStringOrNull("name") ?? "",
+            Overview = json.GetStringOrNull("overview"),
             TmdbId = tmdbId,
-            PremiereDate = json.TryGetProperty("first_air_date", out var rd) ? rd.GetString() : null,
-            Status = json.TryGetProperty("status", out var st) ? st.GetString() : null,
+            PremiereDate = json.GetStringOrNull("first_air_date"),
+            Status = json.GetStringOrNull("status"),
         };
 
-        if (json.TryGetProperty("vote_average", out var va) && va.TryGetDouble(out var rating))
+        if (json.TryGetDoubleSafe("vote_average", out var rating))
             meta.CommunityRating = (float)rating;
 
         if (!string.IsNullOrEmpty(meta.PremiereDate) && meta.PremiereDate.Length >= 4 &&
             int.TryParse(meta.PremiereDate[..4], out var y))
             meta.Year = y;
 
-        if (json.TryGetProperty("genres", out var genres))
-            foreach (var g in genres.EnumerateArray())
-                if (g.TryGetProperty("name", out var gn))
-                    meta.Genres.Add(gn.GetString()!);
+        foreach (var g in json.EnumerateArrayOrEmpty("genres"))
+            if (g.GetStringOrNull("name") is { } gn)
+                meta.Genres.Add(gn);
 
-        if (json.TryGetProperty("production_companies", out var studios))
-            foreach (var s in studios.EnumerateArray())
-                if (s.TryGetProperty("name", out var sn))
-                    meta.Studios.Add(sn.GetString()!);
+        foreach (var s in json.EnumerateArrayOrEmpty("production_companies"))
+            if (s.GetStringOrNull("name") is { } sn)
+                meta.Studios.Add(sn);
 
-        if (json.TryGetProperty("poster_path", out var poster) && poster.GetString() is { } pp)
+        if (json.GetStringOrNull("poster_path") is { } pp)
             meta.PosterUrl = ImageBase + pp;
 
         if (json.TryGetProperty("credits", out var credits))
@@ -235,49 +223,43 @@ public class TmdbClient
 
     private static void ParseCredits(JsonElement credits, List<PersonInfo> people)
     {
-        if (credits.TryGetProperty("cast", out var cast))
+        var order = 0;
+        foreach (var c in credits.EnumerateArrayOrEmpty("cast"))
         {
-            var order = 0;
-            foreach (var c in cast.EnumerateArray())
+            if (order >= 30) break;
+            var name = c.GetStringOrNull("name");
+            if (string.IsNullOrEmpty(name)) continue;
+            people.Add(new PersonInfo
             {
-                if (order >= 30) break;
-                var name = c.TryGetProperty("name", out var n) ? n.GetString() : null;
-                if (string.IsNullOrEmpty(name)) continue;
-                people.Add(new PersonInfo
-                {
-                    Name = name,
-                    Type = "Actor",
-                    Role = c.TryGetProperty("character", out var ch) ? ch.GetString() : null,
-                    SortOrder = order++,
-                    TmdbId = c.TryGetProperty("id", out var id) ? id.GetInt64().ToString() : null,
-                    ImageUrl = c.TryGetProperty("profile_path", out var pp) && pp.GetString() is { } path
-                        ? ImageBase + path : null,
-                });
-            }
+                Name = name,
+                Type = "Actor",
+                Role = c.GetStringOrNull("character"),
+                SortOrder = order++,
+                TmdbId = c.GetIdString("id"),
+                ImageUrl = c.GetStringOrNull("profile_path") is { } path
+                    ? ImageBase + path : null,
+            });
         }
 
-        if (credits.TryGetProperty("crew", out var crew))
+        foreach (var c in credits.EnumerateArrayOrEmpty("crew"))
         {
-            foreach (var c in crew.EnumerateArray())
+            var job = c.GetStringOrNull("job");
+            var type = job switch
             {
-                var job = c.TryGetProperty("job", out var j) ? j.GetString() : null;
-                var type = job switch
-                {
-                    "Director" => "Director",
-                    "Writer" or "Screenplay" => "Writer",
-                    "Producer" => "Producer",
-                    _ => null,
-                };
-                if (type is null) continue;
-                var name = c.TryGetProperty("name", out var n) ? n.GetString() : null;
-                if (string.IsNullOrEmpty(name)) continue;
-                people.Add(new PersonInfo
-                {
-                    Name = name,
-                    Type = type,
-                    TmdbId = c.TryGetProperty("id", out var id) ? id.GetInt64().ToString() : null,
-                });
-            }
+                "Director" => "Director",
+                "Writer" or "Screenplay" => "Writer",
+                "Producer" => "Producer",
+                _ => null,
+            };
+            if (type is null) continue;
+            var name = c.GetStringOrNull("name");
+            if (string.IsNullOrEmpty(name)) continue;
+            people.Add(new PersonInfo
+            {
+                Name = name,
+                Type = type,
+                TmdbId = c.GetIdString("id"),
+            });
         }
     }
 }

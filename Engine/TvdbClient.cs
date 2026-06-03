@@ -57,61 +57,54 @@ public class TvdbClient
 
             var meta = new MovieMetadata
             {
-                Title = d.TryGetProperty("name", out var n) ? n.GetString() ?? "" : "",
+                Title = d.GetStringOrNull("name") ?? "",
                 TvdbId = tvdbId,
                 FromTvdb = true,
             };
 
-            if (d.TryGetProperty("year", out var y) && y.TryGetInt32(out var year))
+            if (d.TryGetInt("year", out var year))
             {
                 meta.Year = year;
                 meta.ProductionYear = year;
             }
 
-            if (d.TryGetProperty("overview", out var ov))
-                meta.Overview = ov.GetString();
+            meta.Overview = d.GetStringOrNull("overview") ?? meta.Overview;
 
-            if (d.TryGetProperty("runtime", out var rt) && rt.TryGetInt32(out var mins))
+            if (d.TryGetInt("runtime", out var mins))
                 meta.RunTimeTicks = mins * 600_000_000L;
 
-            if (d.TryGetProperty("genres", out var genres))
-                foreach (var g in genres.EnumerateArray())
-                    if (g.TryGetProperty("name", out var gn))
-                        meta.Genres.Add(gn.GetString()!);
+            foreach (var g in d.EnumerateArrayOrEmpty("genres"))
+                if (g.GetStringOrNull("name") is { } gn)
+                    meta.Genres.Add(gn);
 
-            if (d.TryGetProperty("companies", out var cos))
-                foreach (var c in cos.EnumerateArray())
-                    if (c.TryGetProperty("name", out var cn))
-                        meta.Studios.Add(cn.GetString()!);
+            // TVDB v4 "companies" is sometimes an object (studio/network/...) rather than an
+            // array; EnumerateArrayOrEmpty skips it gracefully in that case.
+            foreach (var c in d.EnumerateArrayOrEmpty("companies"))
+                if (c.GetStringOrNull("name") is { } cn)
+                    meta.Studios.Add(cn);
 
-            if (d.TryGetProperty("remoteIds", out var rids))
+            foreach (var rid in d.EnumerateArrayOrEmpty("remoteIds"))
             {
-                foreach (var rid in rids.EnumerateArray())
-                {
-                    var source = rid.TryGetProperty("sourceName", out var sn) ? sn.GetString() : null;
-                    var id = rid.TryGetProperty("id", out var idv) ? idv.GetString() : null;
-                    if (string.IsNullOrEmpty(id)) continue;
-                    if (source == "TheMovieDB.com") meta.TmdbId ??= id;
-                    else if (source == "IMDB") meta.ImdbId ??= id;
-                }
+                var source = rid.GetStringOrNull("sourceName");
+                var id = rid.GetStringOrNull("id");
+                if (string.IsNullOrEmpty(id)) continue;
+                if (source == "TheMovieDB.com") meta.TmdbId ??= id;
+                else if (source == "IMDB") meta.ImdbId ??= id;
             }
 
-            if (d.TryGetProperty("characters", out var chars))
+            var order = 0;
+            foreach (var c in d.EnumerateArrayOrEmpty("characters"))
             {
-                var order = 0;
-                foreach (var c in chars.EnumerateArray())
+                if (order >= 30) break;
+                var pName = c.GetStringOrNull("personName");
+                if (string.IsNullOrEmpty(pName)) continue;
+                meta.People.Add(new PersonInfo
                 {
-                    if (order >= 30) break;
-                    var pName = c.TryGetProperty("personName", out var pn) ? pn.GetString() : null;
-                    if (string.IsNullOrEmpty(pName)) continue;
-                    meta.People.Add(new PersonInfo
-                    {
-                        Name = pName,
-                        Type = "Actor",
-                        Role = c.TryGetProperty("name", out var cn) ? cn.GetString() : null,
-                        SortOrder = order++,
-                    });
-                }
+                    Name = pName,
+                    Type = "Actor",
+                    Role = c.GetStringOrNull("name"),
+                    SortOrder = order++,
+                });
             }
 
             return meta;
@@ -133,23 +126,20 @@ public class TvdbClient
 
             var meta = new TvShowMetadata
             {
-                Title = d.TryGetProperty("name", out var n) ? n.GetString() ?? "" : "",
+                Title = d.GetStringOrNull("name") ?? "",
                 TvdbId = tvdbId,
-                Overview = d.TryGetProperty("overview", out var ov) ? ov.GetString() : null,
-                Status = d.TryGetProperty("status", out var st) && st.TryGetProperty("name", out var sn)
-                    ? sn.GetString() : null,
+                Overview = d.GetStringOrNull("overview"),
+                Status = d.TryGetProperty("status", out var st) ? st.GetStringOrNull("name") : null,
             };
 
-            if (d.TryGetProperty("year", out var y) && y.TryGetInt32(out var year))
+            if (d.TryGetInt("year", out var year))
                 meta.Year = year;
 
-            if (d.TryGetProperty("firstAired", out var fa))
-                meta.PremiereDate = fa.GetString();
+            meta.PremiereDate = d.GetStringOrNull("firstAired");
 
-            if (d.TryGetProperty("genres", out var genres))
-                foreach (var g in genres.EnumerateArray())
-                    if (g.TryGetProperty("name", out var gn))
-                        meta.Genres.Add(gn.GetString()!);
+            foreach (var g in d.EnumerateArrayOrEmpty("genres"))
+                if (g.GetStringOrNull("name") is { } gn)
+                    meta.Genres.Add(gn);
 
             return meta;
         }
@@ -177,20 +167,20 @@ public class TvdbClient
                 if (!json.TryGetProperty("data", out var data) || !data.TryGetProperty("episodes", out var eps)) break;
 
                 var count = 0;
-                foreach (var ep in eps.EnumerateArray())
+                foreach (var ep in eps.AsArrayOrEmpty())
                 {
                     count++;
-                    if (!ep.TryGetProperty("seasonNumber", out var snEl) || !snEl.TryGetInt32(out var s)) continue;
-                    if (!ep.TryGetProperty("number", out var enEl) || !enEl.TryGetInt32(out var e)) continue;
+                    if (!ep.TryGetInt("seasonNumber", out var s)) continue;
+                    if (!ep.TryGetInt("number", out var e)) continue;
                     var m = new EpisodeMetadata
                     {
                         SeasonNumber = s,
                         EpisodeNumber = e,
-                        Title = ep.TryGetProperty("name", out var n) ? n.GetString() ?? "" : "",
-                        Overview = ep.TryGetProperty("overview", out var ov) ? ov.GetString() : null,
-                        PremiereDate = ep.TryGetProperty("aired", out var ad) ? ad.GetString() : null,
+                        Title = ep.GetStringOrNull("name") ?? "",
+                        Overview = ep.GetStringOrNull("overview"),
+                        PremiereDate = ep.GetStringOrNull("aired"),
                     };
-                    if (ep.TryGetProperty("runtime", out var rt) && rt.TryGetInt32(out var mins)) m.RunTimeTicks = mins * 600_000_000L;
+                    if (ep.TryGetInt("runtime", out var mins)) m.RunTimeTicks = mins * 600_000_000L;
                     map[(s, e)] = m;
                 }
 
@@ -215,10 +205,10 @@ public class TvdbClient
             var data = await GetAsync($"{BaseUrl}/search?query={query}{yearParam}").ConfigureAwait(false);
             if (data is null) return (null, null);
 
-            foreach (var item in data.Value.EnumerateArray())
+            foreach (var item in data.Value.AsArrayOrEmpty())
             {
-                var tvdbId = item.TryGetProperty("tvdb_id", out var id) ? id.GetString() : null;
-                var type = item.TryGetProperty("type", out var t) ? t.GetString() : null;
+                var tvdbId = item.GetIdString("tvdb_id");
+                var type = item.GetStringOrNull("type");
                 if (!string.IsNullOrEmpty(tvdbId))
                     return (tvdbId, type);
             }
