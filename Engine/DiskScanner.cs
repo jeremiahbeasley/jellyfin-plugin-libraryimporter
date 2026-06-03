@@ -17,7 +17,8 @@ public static partial class DiskScanner
             foreach (var movieDir in Directory.EnumerateDirectories(basePath))
             {
                 var dirName = Path.GetFileName(movieDir);
-                if (dirName.StartsWith('.') || dirName.StartsWith('$')) continue;
+                if (dirName.StartsWith('.') || dirName.StartsWith('$')
+                    || dirName.Equals("lost+found", StringComparison.OrdinalIgnoreCase)) continue;
 
                 string? videoFile = null;
                 string? nfoFile = null;
@@ -49,7 +50,8 @@ public static partial class DiskScanner
             foreach (var showDir in Directory.EnumerateDirectories(basePath))
             {
                 var dirName = Path.GetFileName(showDir);
-                if (dirName.StartsWith('.') || dirName.StartsWith('$')) continue;
+                if (dirName.StartsWith('.') || dirName.StartsWith('$')
+                    || dirName.Equals("lost+found", StringComparison.OrdinalIgnoreCase)) continue;
 
                 var nfoFile = Path.Combine(showDir, "tvshow.nfo");
                 results.Add((showDir, File.Exists(nfoFile) ? nfoFile : null));
