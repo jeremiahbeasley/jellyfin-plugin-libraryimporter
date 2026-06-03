@@ -3,6 +3,7 @@ using Jellyfin.Plugin.LibraryImporter.Engine;
 using Jellyfin.Plugin.LibraryImporter.Models;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Library;
+using MediaBrowser.Controller.Persistence;
 using MediaBrowser.Model.Tasks;
 using Microsoft.Extensions.Logging;
 
@@ -11,13 +12,15 @@ namespace Jellyfin.Plugin.LibraryImporter.ScheduledTasks;
 public class LibraryImportTask : IScheduledTask
 {
     private readonly ILibraryManager _libraryManager;
+    private readonly IItemRepository _itemRepository;
     private readonly ILogger<LibraryImportTask> _logger;
     private readonly IHttpClientFactory _httpClientFactory;
 
-    public LibraryImportTask(ILibraryManager libraryManager, ILogger<LibraryImportTask> logger,
-        IHttpClientFactory httpClientFactory)
+    public LibraryImportTask(ILibraryManager libraryManager, IItemRepository itemRepository,
+        ILogger<LibraryImportTask> logger, IHttpClientFactory httpClientFactory)
     {
         _libraryManager = libraryManager;
+        _itemRepository = itemRepository;
         _logger = logger;
         _httpClientFactory = httpClientFactory;
     }
@@ -80,10 +83,14 @@ public class LibraryImportTask : IScheduledTask
         }
 
         var httpClient = _httpClientFactory.CreateClient("LibraryImporter");
+        // Without an explicit per-request timeout a stalled TVDB/TMDB call hangs the whole
+        // scan (observed ~3 min per stuck show). Cap each request so a slow lookup fails fast
+        // and the scan moves on instead of crawling.
+        httpClient.Timeout = TimeSpan.FromSeconds(30);
         var tmdb = new TmdbClient(httpClient, config.TmdbApiKey, _logger);
         var tvdb = new TvdbClient(httpClient, config.TvdbApiKey, _logger);
 
-        var engine = new ImportEngine(_libraryManager, tmdb, tvdb, config, _logger);
+        var engine = new ImportEngine(_libraryManager, _itemRepository, tmdb, tvdb, config, _logger);
 
         var totalLibraries = enabledLibraries.Count;
         var completedLibraries = 0;

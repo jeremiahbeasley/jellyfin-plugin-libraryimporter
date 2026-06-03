@@ -5,6 +5,7 @@ using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Entities.Movies;
 using MediaBrowser.Controller.Entities.TV;
 using MediaBrowser.Controller.Library;
+using MediaBrowser.Controller.Persistence;
 using MediaBrowser.Model.Entities;
 using Microsoft.Extensions.Logging;
 using JfPersonInfo = MediaBrowser.Controller.Entities.PersonInfo;
@@ -20,21 +21,65 @@ namespace Jellyfin.Plugin.LibraryImporter.Engine;
 public class ImportEngine
 {
     private readonly ILibraryManager _lib;
+    private readonly IItemRepository _repo;
     private readonly TmdbClient _tmdb;
     private readonly TvdbClient _tvdb;
     private readonly ILogger _logger;
     private readonly PluginConfiguration _config;
     private readonly bool _dryRun;
 
-    public ImportEngine(ILibraryManager lib, TmdbClient tmdb, TvdbClient tvdb,
+    public ImportEngine(ILibraryManager lib, IItemRepository repo, TmdbClient tmdb, TvdbClient tvdb,
         PluginConfiguration config, ILogger logger)
     {
         _lib = lib;
+        _repo = repo;
         _tmdb = tmdb;
         _tvdb = tvdb;
         _config = config;
         _logger = logger;
         _dryRun = config.DryRun;
+    }
+
+    /// <summary>
+    /// Persists NEW items exactly as ILibraryManager.CreateItems does — repository save
+    /// (rows + ancestor wiring), cache registration, parent child-cache invalidation —
+    /// but WITHOUT raising the ItemAdded event. Library events run every subscribed
+    /// plugin's handler synchronously per item (TVDB's missing-episode provider, tag
+    /// caches, ...), each often issuing its own DB queries; on a bulk import that event
+    /// storm dwarfs the import itself. Quiet persistence keeps bulk imports fast no
+    /// matter which other plugins are installed. Other plugins catch up on their own
+    /// scheduled scans instead of per-item callbacks.
+    /// </summary>
+    private void CreateItemsQuiet(IReadOnlyList<BaseItem> items, BaseItem parent, CancellationToken ct)
+    {
+        _repo.SaveItems(items, ct);
+        foreach (var item in items)
+            _lib.RegisterItem(item);
+        InvalidateChildCache(parent);
+    }
+
+    /// <summary>Quiet counterpart of ILibraryManager.UpdateItemsAsync (see <see cref="CreateItemsQuiet"/>).</summary>
+    private async Task UpdateItemsQuietAsync(IReadOnlyList<BaseItem> items, BaseItem parent, CancellationToken ct)
+    {
+        foreach (var item in items)
+        {
+            item.DateLastSaved = DateTime.UtcNow;
+            await _lib.RunMetadataSavers(item, ItemUpdateType.MetadataImport).ConfigureAwait(false);
+        }
+
+        _repo.SaveItems(items, ct);
+        InvalidateChildCache(parent);
+    }
+
+    private static void InvalidateChildCache(BaseItem parent)
+    {
+        // Mirrors LibraryManager.CreateItems/UpdateItemsAsync: force the parent folder to
+        // re-query children/user data instead of serving its stale in-memory cache.
+        if (parent is Folder folder)
+        {
+            folder.Children = null!;
+            folder.UserData = null!;
+        }
     }
 
     public async Task<LibraryScanResult> ImportMoviesAsync(
@@ -69,6 +114,21 @@ public class ImportEngine
                     continue;
                 }
 
+                var itemPath = videoFile ?? folderPath;
+                var itemId = _lib.GetNewItemId(itemPath, typeof(Movie));
+                var existing = _lib.GetItemById<Movie>(itemId);
+
+                // Fast path: already imported with real metadata and a poster — skip the
+                // TMDB/TVDB calls and writes entirely. Movies matching a configured override
+                // are never skipped, so override edits always propagate on the next run.
+                if (existing is not null && !HasOverride(folderPath) && IsMovieFullyImported(existing))
+                {
+                    result.Skipped++;
+                    continue;
+                }
+
+                _logger.LogInformation("Movie {Index}/{Count}: importing {Folder}", i + 1, movies.Count, folderName);
+
                 var meta = await ResolveMovieMetadataAsync(folderPath, folderName, nfoFile).ConfigureAwait(false);
                 if (meta is null) { result.Skipped++; continue; }
 
@@ -76,10 +136,6 @@ public class ImportEngine
                 meta.VideoPath = videoFile;
                 ApplyOverride(meta);
 
-                var itemPath = videoFile ?? folderPath;
-                var itemId = _lib.GetNewItemId(itemPath, typeof(Movie));
-
-                var existing = _lib.GetItemById<Movie>(itemId);
                 var isNew = existing is null;
                 var movie = existing ?? new Movie { Id = itemId };
 
@@ -120,9 +176,9 @@ public class ImportEngine
         if (!_dryRun)
         {
             foreach (var (_, (parent, items)) in createByParent)
-                _lib.CreateItems(items, parent, ct);
+                CreateItemsQuiet(items, parent, ct);
             foreach (var (_, (parent, items)) in updateByParent)
-                await _lib.UpdateItemsAsync(items, parent, ItemUpdateType.MetadataImport, ct).ConfigureAwait(false);
+                await UpdateItemsQuietAsync(items, parent, ct).ConfigureAwait(false);
 
             foreach (var (item, people) in pendingPeople)
             {
@@ -243,6 +299,19 @@ public class ImportEngine
                 var basePath = libraryPaths.FirstOrDefault(p => showDir.StartsWith(p, StringComparison.Ordinal));
                 if (basePath is null || !folderByPath.TryGetValue(basePath, out var parent)) { result.Skipped++; continue; }
 
+                // Fast path: every on-disk episode of this show is already in the DB with real
+                // metadata — nothing to do. Skipping here avoids the TVDB/TMDB calls and DB
+                // writes entirely, which is what keeps nightly re-runs fast on large libraries.
+                var seriesId = _lib.GetNewItemId(showDir, typeof(Series));
+                var existingSeries = _lib.GetItemById<Series>(seriesId);
+                if (existingSeries is not null && IsShowFullyImported(existingSeries, showDir))
+                {
+                    result.Skipped++;
+                    continue;
+                }
+
+                _logger.LogInformation("TV {Index}/{Count}: importing {Folder}", i + 1, shows.Count, folderName);
+
                 var meta = await ResolveTvMetadataAsync(showDir, folderName, nfoFile).ConfigureAwait(false)
                     ?? new TvShowMetadata
                     {
@@ -252,8 +321,6 @@ public class ImportEngine
                     };
 
                 // SERIES — must exist before its seasons can be parented under it
-                var seriesId = _lib.GetNewItemId(showDir, typeof(Series));
-                var existingSeries = _lib.GetItemById<Series>(seriesId);
                 var series = existingSeries ?? new Series { Id = seriesId };
                 PopulateSeries(series, showDir, meta, parent);
                 await PersistAsync(series, existingSeries is null, parent, ct).ConfigureAwait(false);
@@ -302,8 +369,8 @@ public class ImportEngine
 
                     if (!_dryRun)
                     {
-                        if (newEps.Count > 0) _lib.CreateItems(newEps, season, ct);
-                        if (updEps.Count > 0) await _lib.UpdateItemsAsync(updEps, season, ItemUpdateType.MetadataImport, ct).ConfigureAwait(false);
+                        if (newEps.Count > 0) CreateItemsQuiet(newEps, season, ct);
+                        if (updEps.Count > 0) await UpdateItemsQuietAsync(updEps, season, ct).ConfigureAwait(false);
                     }
                 }
             }
@@ -339,8 +406,59 @@ public class ImportEngine
     private async Task PersistAsync(BaseItem item, bool isNew, BaseItem parent, CancellationToken ct)
     {
         if (_dryRun) return;
-        if (isNew) _lib.CreateItems([item], parent, ct);
-        else await _lib.UpdateItemsAsync([item], parent, ItemUpdateType.MetadataImport, ct).ConfigureAwait(false);
+        if (isNew) CreateItemsQuiet([item], parent, ct);
+        else await UpdateItemsQuietAsync([item], parent, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// True when the movie is already in the DB with real metadata and a primary image.
+    /// Movies missing a poster fail the check so the TMDB poster download gets another
+    /// chance on the next run.
+    /// </summary>
+    private static bool IsMovieFullyImported(Movie movie)
+    {
+        // No overview and no provider ids → never completed a metadata import.
+        if (string.IsNullOrEmpty(movie.Overview) && movie.ProviderIds.Count == 0)
+            return false;
+
+        return movie.GetImageInfo(ImageType.Primary, 0) is not null;
+    }
+
+    private bool HasOverride(string folderPath) =>
+        _config.Overrides.Any(o => folderPath.Contains(o.PathPattern, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>
+    /// True when the series and every on-disk season/episode are already in the DB with
+    /// real metadata. Episodes still carrying the "Episode N" placeholder title fail the
+    /// check on purpose: shows imported while metadata lookups were broken get re-fetched
+    /// once (healing their titles), then skip on every run after.
+    /// </summary>
+    private bool IsShowFullyImported(Series series, string showDir)
+    {
+        // A series with no overview and no provider ids never completed a metadata import.
+        if (string.IsNullOrEmpty(series.Overview) && series.ProviderIds.Count == 0)
+            return false;
+
+        foreach (var (seasonDir, seasonNum) in DiskScanner.ScanSeasons(showDir))
+        {
+            if (_lib.GetItemById<Season>(_lib.GetNewItemId(seasonDir, typeof(Season))) is null)
+                return false;
+
+            foreach (var (epPath, _, e, _) in DiskScanner.ScanEpisodes(seasonDir, seasonNum))
+            {
+                var ep = _lib.GetItemById<Episode>(_lib.GetNewItemId(epPath, typeof(Episode)));
+                if (ep is null || string.IsNullOrEmpty(ep.Name))
+                    return false;
+
+                // "Episode N" with no overview = placeholder from a failed metadata import →
+                // re-fetch. Some shows (lots of UK ones) genuinely title episodes "Episode N";
+                // those carry an overview, so they pass and skip on subsequent runs.
+                if (ep.Name == $"Episode {e}" && string.IsNullOrEmpty(ep.Overview))
+                    return false;
+            }
+        }
+
+        return true;
     }
 
     private void PopulateSeries(Series series, string showDir, TvShowMetadata meta, Folder parent)
