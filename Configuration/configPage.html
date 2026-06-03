@@ -148,8 +148,15 @@
         #LibraryImporterConfigPage .li-field .li-hint {
             display: block; font-weight: 400; color: var(--li-text-3); font-size: .85em; margin-top: .25em;
         }
+        #LibraryImporterConfigPage .li-section-hint {
+            color: var(--li-text-3); font-size: .9em; margin: -.25em 0 var(--li-s3); max-width: 70ch;
+        }
+        #LibraryImporterConfigPage .li-section-hint strong { color: var(--li-text); font-weight: 600; }
+        #LibraryImporterConfigPage .li-section-hint .li-hint-line { display: block; }
+        #LibraryImporterConfigPage .li-section-hint .li-hint-line + .li-hint-line { margin-top: .35em; }
         #LibraryImporterConfigPage input[type="text"],
         #LibraryImporterConfigPage input[type="number"],
+        #LibraryImporterConfigPage input[type="password"],
         #LibraryImporterConfigPage textarea,
         #LibraryImporterConfigPage select {
             width: 100%; box-sizing: border-box;
@@ -158,6 +165,10 @@
             border: 1px solid var(--li-border); border-radius: var(--li-r-sm);
             font: inherit;
         }
+        /* API key row: input + Show/Copy buttons */
+        #LibraryImporterConfigPage .li-keyrow { display: flex; gap: .4em; align-items: stretch; }
+        #LibraryImporterConfigPage .li-keyrow input { flex: 1 1 auto; min-width: 0; }
+        #LibraryImporterConfigPage .li-keyrow .li-btn { flex: 0 0 auto; min-width: 64px; }
         #LibraryImporterConfigPage textarea { min-height: 88px; resize: vertical; }
         #LibraryImporterConfigPage input::placeholder,
         #LibraryImporterConfigPage textarea::placeholder { color: var(--li-text-3); }
@@ -284,6 +295,19 @@
             width: 100%; max-width: 720px; max-height: 86vh; overflow-y: auto;
         }
         #LibraryImporterConfigPage .li-modal h2 { margin: 0 0 var(--li-s3); font-size: 1.2em; }
+        /* x close button — top right of every modal */
+        #LibraryImporterConfigPage .li-modal { position: relative; }
+        #LibraryImporterConfigPage .li-modal-close {
+            position: absolute; top: .4em; right: .4em;
+            width: 44px; height: 44px; padding: 0;
+            display: inline-flex; align-items: center; justify-content: center;
+            background: transparent; border: 1px solid transparent; border-radius: var(--li-r-sm);
+            color: inherit; font-size: 1.5em; line-height: 1; cursor: pointer;
+        }
+        #LibraryImporterConfigPage .li-modal-close:hover,
+        #LibraryImporterConfigPage .li-modal-close:focus-visible {
+            background: var(--li-surface-2); border-color: var(--li-border);
+        }
         #LibraryImporterConfigPage .li-chips { display: flex; flex-wrap: wrap; gap: .4em; margin-top: .5em; }
         #LibraryImporterConfigPage .li-chip {
             display: inline-flex; align-items: center; gap: .4em;
@@ -378,16 +402,29 @@
                         <div class="li-grid">
                             <div class="li-field">
                                 <label for="tmdbKey">TMDB API key <span aria-hidden="true">·</span> required</label>
-                                <input id="tmdbKey" type="text" autocomplete="off" spellcheck="false"
-                                       aria-describedby="tmdbHint" />
+                                <div class="li-keyrow">
+                                    <input id="tmdbKey" type="password" autocomplete="off" spellcheck="false"
+                                           aria-describedby="tmdbHint" />
+                                    <button type="button" class="li-btn li-key-toggle" data-target="tmdbKey"
+                                            aria-label="Show TMDB API key" aria-pressed="false">Show</button>
+                                    <button type="button" class="li-btn li-key-copy" data-target="tmdbKey"
+                                            aria-label="Copy TMDB API key">Copy</button>
+                                </div>
                                 <span class="li-hint" id="tmdbHint">Used for movie &amp; TV lookups and poster downloads.</span>
                             </div>
                             <div class="li-field">
                                 <label for="tvdbKey">TVDB API key <span aria-hidden="true">·</span> optional</label>
-                                <input id="tvdbKey" type="text" autocomplete="off" spellcheck="false"
-                                       aria-describedby="tvdbHint" />
+                                <div class="li-keyrow">
+                                    <input id="tvdbKey" type="password" autocomplete="off" spellcheck="false"
+                                           aria-describedby="tvdbHint" />
+                                    <button type="button" class="li-btn li-key-toggle" data-target="tvdbKey"
+                                            aria-label="Show TVDB API key" aria-pressed="false">Show</button>
+                                    <button type="button" class="li-btn li-key-copy" data-target="tvdbKey"
+                                            aria-label="Copy TVDB API key">Copy</button>
+                                </div>
                                 <span class="li-hint" id="tvdbHint">Fallback when TMDB has no match.</span>
                             </div>
+                            <span class="li-sr" id="liKeyLive" aria-live="polite"></span>
                         </div>
                         <div class="li-field" style="margin-bottom:0;">
                             <label class="li-check">
@@ -400,6 +437,11 @@
                     <!-- ============ LIBRARIES ============ -->
                     <section class="li-card" aria-labelledby="liLibHeading">
                         <h2 id="liLibHeading">Libraries</h2>
+                        <p class="li-section-hint" id="liLibHint">
+                            <span class="li-hint-line"><strong>Import</strong> — include this library in manual and scheduled scans.</span>
+                            <span class="li-hint-line"><strong>Purge</strong> — after a scan, remove items from Jellyfin's database when their
+                            files no longer exist on disk. Your media files are never touched.</span>
+                        </p>
                         <div id="libraryList" aria-live="polite"></div>
                     </section>
 
@@ -424,6 +466,7 @@
         <!-- ============ Override modal ============ -->
         <div id="overrideModal" class="li-modal-overlay" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
             <div class="li-modal">
+                <button type="button" class="li-modal-close" id="ovModalCloseBtn" aria-label="Close">&times;</button>
                 <h2 id="modalTitle">Add override</h2>
                 <input id="editOverrideId" type="hidden" />
 
@@ -505,8 +548,49 @@
             $('addPersonBtn').addEventListener('click', function () { addPersonRow(); });
             $('saveOvBtn').addEventListener('click', saveOverride);
             $('cancelOvBtn').addEventListener('click', closeOverrideModal);
+            $('ovModalCloseBtn').addEventListener('click', closeOverrideModal);
             $('genreInput').addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); addChip('genres'); } });
             $('studioInput').addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); addChip('studios'); } });
+
+            // API key fields: show/hide toggle + copy. navigator.clipboard requires a secure
+            // context (HTTPS); plain-HTTP LAN access falls back to a temporary textarea.
+            document.querySelectorAll('.li-key-toggle').forEach(function (btn) {
+                btn.addEventListener('click', function () {
+                    var input = $(btn.dataset.target);
+                    var keyName = btn.dataset.target.replace('Key', '').toUpperCase();
+                    var show = input.type === 'password';
+                    input.type = show ? 'text' : 'password';
+                    btn.textContent = show ? 'Hide' : 'Show';
+                    btn.setAttribute('aria-pressed', String(show));
+                    btn.setAttribute('aria-label', (show ? 'Hide ' : 'Show ') + keyName + ' API key');
+                });
+            });
+            document.querySelectorAll('.li-key-copy').forEach(function (btn) {
+                btn.addEventListener('click', async function () {
+                    var input = $(btn.dataset.target);
+                    var ok = false;
+                    try {
+                        if (navigator.clipboard && window.isSecureContext) {
+                            await navigator.clipboard.writeText(input.value);
+                            ok = true;
+                        }
+                    } catch (e) { /* fall back below */ }
+                    if (!ok) {
+                        var ta = document.createElement('textarea');
+                        ta.value = input.value;
+                        ta.setAttribute('readonly', '');
+                        ta.style.position = 'absolute';
+                        ta.style.left = '-9999px';
+                        document.body.appendChild(ta);
+                        ta.select();
+                        try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+                        document.body.removeChild(ta);
+                    }
+                    btn.textContent = ok ? 'Copied' : 'Failed';
+                    $('liKeyLive').textContent = ok ? 'API key copied to clipboard' : 'Copy failed';
+                    setTimeout(function () { btn.textContent = 'Copy'; $('liKeyLive').textContent = ''; }, 1500);
+                });
+            });
             // Esc closes the modal (keyboard / remote back)
             document.addEventListener('keydown', function (e) {
                 if (e.key === 'Escape' && $('overrideModal').classList.contains('active')) closeOverrideModal();
