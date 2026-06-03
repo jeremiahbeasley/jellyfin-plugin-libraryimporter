@@ -1,3 +1,4 @@
+using Jellyfin.Plugin.LibraryImporter.Configuration;
 using Jellyfin.Plugin.LibraryImporter.Engine;
 using Jellyfin.Plugin.LibraryImporter.Models;
 using MediaBrowser.Controller.Library;
@@ -47,9 +48,25 @@ public class LibraryImportTask : IScheduledTask
         }
 
         var config = plugin.Configuration;
+
+        var summary = new RunSummary
+        {
+            StartedUtc = DateTime.UtcNow.ToString("o"),
+            DryRun = config.DryRun,
+        };
+
+        void SaveSummary(string status)
+        {
+            summary.Status = status;
+            summary.FinishedUtc = DateTime.UtcNow.ToString("o");
+            config.LastRun = summary;
+            plugin.SaveConfiguration();
+        }
+
         if (string.IsNullOrEmpty(config.TmdbApiKey))
         {
             _logger.LogWarning("TMDB API key not configured — skipping scan");
+            SaveSummary("Skipped");
             return;
         }
 
@@ -57,6 +74,7 @@ public class LibraryImportTask : IScheduledTask
         if (enabledLibraries.Count == 0)
         {
             _logger.LogInformation("No libraries enabled for scanning");
+            SaveSummary("Skipped");
             return;
         }
 
@@ -114,6 +132,14 @@ public class LibraryImportTask : IScheduledTask
                 "Library '{Name}': Added={Added}, Updated={Updated}, Skipped={Skipped}, Failed={Failed}, Purged={Purged}",
                 result.LibraryName, result.Added, result.Updated, result.Skipped, result.Failed, result.Purged);
 
+            summary.Added += result.Added;
+            summary.Updated += result.Updated;
+            summary.Skipped += result.Skipped;
+            summary.Failed += result.Failed;
+            summary.Purged += result.Purged;
+            summary.PostersDownloaded += result.PostersDownloaded;
+            summary.LibrariesProcessed++;
+
             completedLibraries++;
         }
 
@@ -121,6 +147,7 @@ public class LibraryImportTask : IScheduledTask
         // The scheduled "Scan All Libraries" task handles this
 
         progress.Report(100);
+        SaveSummary(ct.IsCancellationRequested ? "Cancelled" : "Completed");
         _logger.LogInformation("Library import scan complete");
     }
 
