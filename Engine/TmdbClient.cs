@@ -107,6 +107,40 @@ public class TmdbClient
         return null;
     }
 
+    /// <summary>One call per season returns all episode metadata, keyed by episode number.</summary>
+    public async Task<Dictionary<int, EpisodeMetadata>> GetSeasonEpisodesAsync(string tmdbId, int seasonNum)
+    {
+        var map = new Dictionary<int, EpisodeMetadata>();
+        try
+        {
+            var url = $"{BaseUrl}/tv/{tmdbId}/season/{seasonNum}?api_key={_apiKey}&language=en-US";
+            var json = await _http.GetFromJsonAsync<JsonElement>(url).ConfigureAwait(false);
+            if (json.TryGetProperty("episodes", out var eps))
+            {
+                foreach (var ep in eps.EnumerateArray())
+                {
+                    if (!ep.TryGetProperty("episode_number", out var enEl) || !enEl.TryGetInt32(out var en)) continue;
+                    var m = new EpisodeMetadata
+                    {
+                        SeasonNumber = seasonNum,
+                        EpisodeNumber = en,
+                        Title = ep.TryGetProperty("name", out var n) ? n.GetString() ?? "" : "",
+                        Overview = ep.TryGetProperty("overview", out var ov) ? ov.GetString() : null,
+                        PremiereDate = ep.TryGetProperty("air_date", out var ad) ? ad.GetString() : null,
+                    };
+                    if (ep.TryGetProperty("vote_average", out var va) && va.TryGetDouble(out var r)) m.CommunityRating = (float)r;
+                    if (ep.TryGetProperty("runtime", out var rt) && rt.TryGetInt32(out var mins)) m.RunTimeTicks = mins * 600_000_000L;
+                    map[en] = m;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "TMDB season fetch failed for {Id} S{Season}", tmdbId, seasonNum);
+        }
+        return map;
+    }
+
     private static MovieMetadata ParseMovie(JsonElement json, string tmdbId)
     {
         var meta = new MovieMetadata
