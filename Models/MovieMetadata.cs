@@ -80,7 +80,11 @@ public class OverrideEntry
     public string Id { get; set; } = Guid.NewGuid().ToString("N");
     public string PathPattern { get; set; } = string.Empty;
     public string? Title { get; set; }
+    public string? SortName { get; set; }
+    public string? OriginalTitle { get; set; }
     public int? Year { get; set; }
+    public string? PremiereDate { get; set; }
+    public int? RuntimeMinutes { get; set; }
     public string? TmdbId { get; set; }
     public string? TvdbId { get; set; }
     public string? ImdbId { get; set; }

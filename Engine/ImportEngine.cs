@@ -168,6 +168,8 @@ public class ImportEngine
         movie.ParentId = parent.Id;
         movie.Path = itemPath;
         if (!string.IsNullOrEmpty(meta.Title)) movie.Name = meta.Title;
+        if (!string.IsNullOrEmpty(meta.OriginalTitle)) movie.OriginalTitle = meta.OriginalTitle;
+        if (!string.IsNullOrEmpty(meta.SortName)) movie.ForcedSortName = meta.SortName;
         movie.Overview = meta.Overview ?? movie.Overview;
         movie.Tagline = meta.Tagline ?? movie.Tagline;
         movie.ProductionYear = meta.ProductionYear ?? meta.Year ?? movie.ProductionYear;
@@ -579,7 +581,11 @@ public class ImportEngine
 
         _logger.LogInformation("Applying override for {Path}", meta.FolderPath);
         if (!string.IsNullOrEmpty(overrideEntry.Title)) meta.Title = overrideEntry.Title;
-        if (overrideEntry.Year.HasValue) meta.Year = overrideEntry.Year;
+        if (!string.IsNullOrEmpty(overrideEntry.SortName)) meta.SortName = overrideEntry.SortName;
+        if (!string.IsNullOrEmpty(overrideEntry.OriginalTitle)) meta.OriginalTitle = overrideEntry.OriginalTitle;
+        if (overrideEntry.Year.HasValue) { meta.Year = overrideEntry.Year; meta.ProductionYear = overrideEntry.Year; }
+        if (!string.IsNullOrEmpty(overrideEntry.PremiereDate)) meta.PremiereDate = overrideEntry.PremiereDate;
+        if (overrideEntry.RuntimeMinutes.HasValue) meta.RunTimeTicks = overrideEntry.RuntimeMinutes.Value * 600_000_000L;
         if (!string.IsNullOrEmpty(overrideEntry.TmdbId)) meta.TmdbId = overrideEntry.TmdbId;
         if (!string.IsNullOrEmpty(overrideEntry.TvdbId)) meta.TvdbId = overrideEntry.TvdbId;
         if (!string.IsNullOrEmpty(overrideEntry.ImdbId)) meta.ImdbId = overrideEntry.ImdbId;

@@ -434,7 +434,11 @@
 
                 <div class="li-grid">
                     <div class="li-field"><label for="ovTitle">Title</label><input id="ovTitle" type="text" /></div>
+                    <div class="li-field"><label for="ovSortName">Sort name</label><input id="ovSortName" type="text" /></div>
+                    <div class="li-field"><label for="ovOriginalTitle">Original title</label><input id="ovOriginalTitle" type="text" /></div>
                     <div class="li-field"><label for="ovYear">Year</label><input id="ovYear" type="number" /></div>
+                    <div class="li-field"><label for="ovPremiered">Premiere date</label><input id="ovPremiered" type="text" placeholder="YYYY-MM-DD" /></div>
+                    <div class="li-field"><label for="ovRuntime">Runtime (min)</label><input id="ovRuntime" type="number" min="0" /></div>
                     <div class="li-field"><label for="ovRating">MPAA rating</label><input id="ovRating" type="text" placeholder="PG-13" /></div>
                     <div class="li-field"><label for="ovCommunityRating">Community rating</label><input id="ovCommunityRating" type="number" step="0.1" min="0" max="10" /></div>
                     <div class="li-field"><label for="ovTmdb">TMDB ID</label><input id="ovTmdb" type="text" /></div>
@@ -757,7 +761,11 @@
                 $('editOverrideId').value = entry ? entry.Id : '';
                 $('ovPath').value = entry ? entry.PathPattern : '';
                 $('ovTitle').value = entry ? (entry.Title || '') : '';
+                $('ovSortName').value = entry ? (entry.SortName || '') : '';
+                $('ovOriginalTitle').value = entry ? (entry.OriginalTitle || '') : '';
                 $('ovYear').value = entry ? (entry.Year || '') : '';
+                $('ovPremiered').value = entry ? (entry.PremiereDate || '') : '';
+                $('ovRuntime').value = entry ? (entry.RuntimeMinutes || '') : '';
                 $('ovRating').value = entry ? (entry.OfficialRating || '') : '';
                 $('ovTmdb').value = entry ? (entry.TmdbId || '') : '';
                 $('ovTvdb').value = entry ? (entry.TvdbId || '') : '';
@@ -820,7 +828,11 @@
                 return {
                     PathPattern: $('ovPath').value,
                     Title: $('ovTitle').value || null,
+                    SortName: $('ovSortName').value || null,
+                    OriginalTitle: $('ovOriginalTitle').value || null,
                     Year: $('ovYear').value ? parseInt($('ovYear').value, 10) : null,
+                    PremiereDate: $('ovPremiered').value || null,
+                    RuntimeMinutes: $('ovRuntime').value ? parseInt($('ovRuntime').value, 10) : null,
                     TmdbId: $('ovTmdb').value || null, TvdbId: $('ovTvdb').value || null, ImdbId: $('ovImdb').value || null,
                     Overview: $('ovOverview').value || null, OfficialRating: $('ovRating').value || null,
                     CommunityRating: $('ovCommunityRating').value ? parseFloat($('ovCommunityRating').value) : null,
