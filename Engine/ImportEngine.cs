@@ -263,6 +263,11 @@ public class ImportEngine
                     catch (Exception ex) { _logger.LogWarning(ex, "People update failed for series {Name}", series.Name); }
                 }
 
+                // For TVDB-only series, fetch all episodes once (the TMDB path fetches per-season below)
+                var tvdbEpisodes = string.IsNullOrEmpty(meta.TmdbId) && !string.IsNullOrEmpty(meta.TvdbId)
+                    ? await _tvdb.GetAllEpisodesAsync(meta.TvdbId).ConfigureAwait(false)
+                    : new Dictionary<(int, int), EpisodeMetadata>();
+
                 // SEASONS + EPISODES
                 foreach (var (seasonDir, seasonNum) in DiskScanner.ScanSeasons(showDir))
                 {
@@ -288,6 +293,7 @@ public class ImportEngine
                         var epNfo = Path.ChangeExtension(epPath, ".nfo");
                         EpisodeMetadata? epMeta = File.Exists(epNfo) ? NfoParser.ParseEpisodeNfo(epNfo) : null;
                         if (epMeta is null && epMetaMap.TryGetValue(e, out var tmdbEp)) epMeta = tmdbEp;
+                        if (epMeta is null && tvdbEpisodes.TryGetValue((s, e), out var tvdbEp)) epMeta = tvdbEp;
                         PopulateEpisode(ep, epPath, s, e, baseName, seasonDir, series, season, meta.Title, epMeta);
                         if (existingEp is null) { newEps.Add(ep); result.Added++; } else { updEps.Add(ep); result.Updated++; }
                     }

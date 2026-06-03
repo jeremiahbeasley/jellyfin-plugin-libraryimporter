@@ -160,6 +160,52 @@ public class TvdbClient
         }
     }
 
+    /// <summary>Fetches all episodes for a series once (paginated), keyed by (season, episode).</summary>
+    public async Task<Dictionary<(int season, int episode), EpisodeMetadata>> GetAllEpisodesAsync(string tvdbId)
+    {
+        var map = new Dictionary<(int, int), EpisodeMetadata>();
+        try
+        {
+            await EnsureTokenAsync().ConfigureAwait(false);
+            for (var page = 0; page < 50; page++)
+            {
+                using var req = new HttpRequestMessage(HttpMethod.Get, $"{BaseUrl}/series/{tvdbId}/episodes/default?page={page}");
+                req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _token);
+                var resp = await _http.SendAsync(req).ConfigureAwait(false);
+                if (!resp.IsSuccessStatusCode) break;
+                var json = await resp.Content.ReadFromJsonAsync<JsonElement>().ConfigureAwait(false);
+                if (!json.TryGetProperty("data", out var data) || !data.TryGetProperty("episodes", out var eps)) break;
+
+                var count = 0;
+                foreach (var ep in eps.EnumerateArray())
+                {
+                    count++;
+                    if (!ep.TryGetProperty("seasonNumber", out var snEl) || !snEl.TryGetInt32(out var s)) continue;
+                    if (!ep.TryGetProperty("number", out var enEl) || !enEl.TryGetInt32(out var e)) continue;
+                    var m = new EpisodeMetadata
+                    {
+                        SeasonNumber = s,
+                        EpisodeNumber = e,
+                        Title = ep.TryGetProperty("name", out var n) ? n.GetString() ?? "" : "",
+                        Overview = ep.TryGetProperty("overview", out var ov) ? ov.GetString() : null,
+                        PremiereDate = ep.TryGetProperty("aired", out var ad) ? ad.GetString() : null,
+                    };
+                    if (ep.TryGetProperty("runtime", out var rt) && rt.TryGetInt32(out var mins)) m.RunTimeTicks = mins * 600_000_000L;
+                    map[(s, e)] = m;
+                }
+
+                var hasNext = json.TryGetProperty("links", out var links)
+                    && links.TryGetProperty("next", out var nx) && nx.ValueKind != JsonValueKind.Null;
+                if (!hasNext || count == 0) break;
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "TVDB episodes fetch failed for {Id}", tvdbId);
+        }
+        return map;
+    }
+
     public async Task<(string? id, string? type)> SearchAsync(string title, int? year)
     {
         try
