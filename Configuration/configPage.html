@@ -76,7 +76,6 @@
                 </div>
             </div>
         </div>
-    </div>
 
     <!-- Override Edit Modal -->
     <div id="overrideModal" class="li-modal-overlay">
@@ -159,246 +158,270 @@
         </div>
     </div>
 
-    <script>
-        const apiBase = ApiClient.serverAddress();
-        const apiHeaders = () => ({ 'Content-Type': 'application/json', 'X-Emby-Token': ApiClient.accessToken() });
+    <script type="text/javascript">
+        (function() {
+            var pluginId = 'b74b2d8c-2ab3-411f-9631-c5e8270d7e12';
+            var currentGenres = [];
+            var currentStudios = [];
 
-        let currentGenres = [];
-        let currentStudios = [];
+            // Expose functions globally for onclick handlers
+            window.saveConfig = saveConfig;
+            window.showOverrideModal = showOverrideModal;
+            window.closeOverrideModal = closeOverrideModal;
+            window.addChip = addChip;
+            window.addPersonRow = addPersonRow;
+            window.saveOverride = saveOverride;
+            window.editOverride = editOverride;
+            window.deleteOverride = deleteOverride;
 
-        // Load config on page show
-        document.querySelector('#LibraryImporterConfigPage').addEventListener('viewshow', loadConfig);
+            // Load immediately
+            loadConfig();
 
-        async function loadConfig() {
-            const config = await ApiClient.getPluginConfiguration('b74b2d8c-2ab3-411f-9631-c5e8270d7e12');
-            document.getElementById('tmdbKey').value = config.TmdbApiKey || '';
-            document.getElementById('tvdbKey').value = config.TvdbApiKey || '';
-            document.getElementById('dryRun').checked = config.DryRun || false;
+            async function loadConfig() {
+                var libList = document.getElementById('libraryList');
+                if (libList) libList.innerHTML = '<p>Loading libraries...</p>';
 
-            // Load libraries from server
-            let serverLibs = [];
-            try {
-                const resp = await fetch(apiBase + '/LibraryImporter/Libraries', { headers: apiHeaders() });
-                serverLibs = await resp.json();
-            } catch(e) { console.error('Failed to load libraries', e); }
+                try {
+                    var config = await ApiClient.getPluginConfiguration(pluginId);
+                    document.getElementById('tmdbKey').value = config.TmdbApiKey || '';
+                    document.getElementById('tvdbKey').value = config.TvdbApiKey || '';
+                    document.getElementById('dryRun').checked = config.DryRun || false;
 
-            const libList = document.getElementById('libraryList');
-            libList.innerHTML = '';
-            const videoTypes = ['movies', 'tvshows', 'homevideos', 'mixed', 'unknown', ''];
-            serverLibs.filter(l => videoTypes.includes(l.CollectionType)).forEach(lib => {
-                const saved = (config.Libraries || []).find(l => l.Name === lib.Name) || {};
-                const row = document.createElement('div');
-                row.className = 'li-lib-row';
-                row.innerHTML = `
-                    <label><input type="checkbox" class="lib-enabled" data-name="${lib.Name}" ${saved.Enabled !== false ? 'checked' : ''} />
-                    <strong>${lib.Name}</strong> (${lib.CollectionType}, ${lib.Paths.length} path${lib.Paths.length !== 1 ? 's' : ''})</label>
-                    <label><input type="checkbox" class="lib-purge" data-name="${lib.Name}" ${saved.PurgeMissing ? 'checked' : ''} /> Purge Missing</label>
-                    <label><input type="checkbox" class="lib-dups" data-name="${lib.Name}" ${saved.AutoDups ? 'checked' : ''} /> Auto Dups</label>
-                `;
-                libList.appendChild(row);
-            });
+                    var serverLibs = [];
+                    try {
+                        var resp = await fetch(ApiClient.getUrl('/LibraryImporter/Libraries'), {
+                            headers: { 'X-Emby-Token': ApiClient.accessToken() }
+                        });
+                        serverLibs = await resp.json();
+                    } catch(e) {
+                        console.error('Failed to load libraries', e);
+                        if (libList) libList.innerHTML = '<p style="color:#f88;">Failed to load libraries: ' + e + '</p>';
+                        return;
+                    }
 
-            renderOverrides(config.Overrides || []);
-        }
-
-        async function saveConfig() {
-            const config = await ApiClient.getPluginConfiguration('b74b2d8c-2ab3-411f-9631-c5e8270d7e12');
-            config.TmdbApiKey = document.getElementById('tmdbKey').value;
-            config.TvdbApiKey = document.getElementById('tvdbKey').value;
-            config.DryRun = document.getElementById('dryRun').checked;
-
-            config.Libraries = [];
-            document.querySelectorAll('.lib-enabled').forEach(cb => {
-                const name = cb.dataset.name;
-                const purge = document.querySelector(`.lib-purge[data-name="${name}"]`);
-                const dups = document.querySelector(`.lib-dups[data-name="${name}"]`);
-                config.Libraries.push({
-                    Name: name,
-                    Enabled: cb.checked,
-                    PurgeMissing: purge ? purge.checked : false,
-                    AutoDups: dups ? dups.checked : false
-                });
-            });
-
-            await ApiClient.updatePluginConfiguration('b74b2d8c-2ab3-411f-9631-c5e8270d7e12', config);
-            showStatus('saveStatus', 'Configuration saved.', 'success');
-        }
-
-        function renderOverrides(overrides) {
-            const list = document.getElementById('overrideList');
-            list.innerHTML = '';
-            if (overrides.length === 0) {
-                list.innerHTML = '<p style="color:#888;">No overrides configured.</p>';
-                return;
-            }
-            overrides.forEach(ov => {
-                const card = document.createElement('div');
-                card.className = 'li-override-card';
-                const genreStr = (ov.Genres || []).join(', ') || 'none';
-                const peopleStr = (ov.People || []).map(p => `${p.Name} (${p.Type})`).slice(0, 5).join(', ');
-                card.innerHTML = `
-                    <div class="li-btn-group">
-                        <button class="li-btn" onclick="editOverride('${ov.Id}')">Edit</button>
-                        <button class="li-btn li-btn-danger" onclick="deleteOverride('${ov.Id}')">Delete</button>
-                    </div>
-                    <strong>${ov.Title || ov.PathPattern}</strong>
-                    ${ov.Year ? ` (${ov.Year})` : ''}
-                    <br/><small style="color:#888;">${ov.PathPattern}</small>
-                    <br/><small>TMDB: ${ov.TmdbId || '-'} | TVDB: ${ov.TvdbId || '-'} | IMDB: ${ov.ImdbId || '-'}</small>
-                    <br/><small>Genres: ${genreStr}</small>
-                    ${peopleStr ? `<br/><small>People: ${peopleStr}${(ov.People||[]).length > 5 ? '...' : ''}</small>` : ''}
-                `;
-                list.appendChild(card);
-            });
-        }
-
-        function showOverrideModal(entry) {
-            document.getElementById('modalTitle').textContent = entry ? 'Edit Override' : 'Add Override';
-            document.getElementById('editOverrideId').value = entry ? entry.Id : '';
-            document.getElementById('ovPath').value = entry ? entry.PathPattern : '';
-            document.getElementById('ovTitle').value = entry ? entry.Title || '' : '';
-            document.getElementById('ovYear').value = entry ? entry.Year || '' : '';
-            document.getElementById('ovRating').value = entry ? entry.OfficialRating || '' : '';
-            document.getElementById('ovTmdb').value = entry ? entry.TmdbId || '' : '';
-            document.getElementById('ovTvdb').value = entry ? entry.TvdbId || '' : '';
-            document.getElementById('ovImdb').value = entry ? entry.ImdbId || '' : '';
-            document.getElementById('ovCommunityRating').value = entry ? entry.CommunityRating || '' : '';
-            document.getElementById('ovOverview').value = entry ? entry.Overview || '' : '';
-
-            currentGenres = entry ? [...(entry.Genres || [])] : [];
-            currentStudios = entry ? [...(entry.Studios || [])] : [];
-            renderChips('genres', currentGenres);
-            renderChips('studios', currentStudios);
-
-            const peopleList = document.getElementById('peopleList');
-            peopleList.innerHTML = '';
-            if (entry && entry.People) {
-                entry.People.forEach(p => addPersonRow(p));
-            }
-
-            document.getElementById('overrideModal').classList.add('active');
-        }
-
-        function closeOverrideModal() {
-            document.getElementById('overrideModal').classList.remove('active');
-        }
-
-        function addChip(which) {
-            const inputId = which === 'genres' ? 'genreInput' : 'studioInput';
-            const arr = which === 'genres' ? currentGenres : currentStudios;
-            const val = document.getElementById(inputId).value.trim();
-            if (val && !arr.includes(val)) {
-                arr.push(val);
-                renderChips(which, arr);
-            }
-            document.getElementById(inputId).value = '';
-        }
-
-        function renderChips(containerId, arr) {
-            const container = document.getElementById(containerId);
-            container.innerHTML = '';
-            arr.forEach((val, i) => {
-                const chip = document.createElement('span');
-                chip.className = 'li-chip';
-                chip.textContent = val + ' ×';
-                chip.onclick = () => { arr.splice(i, 1); renderChips(containerId, arr); };
-                container.appendChild(chip);
-            });
-        }
-
-        function addPersonRow(person) {
-            const list = document.getElementById('peopleList');
-            const row = document.createElement('div');
-            row.className = 'li-person-row';
-            row.innerHTML = `
-                <input type="text" class="person-name" placeholder="Name" value="${person ? person.Name : ''}" />
-                <select class="person-type">
-                    <option value="Actor" ${person && person.Type === 'Actor' ? 'selected' : ''}>Actor</option>
-                    <option value="Director" ${person && person.Type === 'Director' ? 'selected' : ''}>Director</option>
-                    <option value="Writer" ${person && person.Type === 'Writer' ? 'selected' : ''}>Writer</option>
-                    <option value="Producer" ${person && person.Type === 'Producer' ? 'selected' : ''}>Producer</option>
-                </select>
-                <input type="text" class="person-role" placeholder="Role/Character" value="${person && person.Role ? person.Role : ''}" />
-                <button class="li-btn li-btn-danger" onclick="this.parentElement.remove()">×</button>
-            `;
-            list.appendChild(row);
-        }
-
-        function collectOverrideFromForm() {
-            const people = [];
-            document.querySelectorAll('#peopleList .li-person-row').forEach((row, i) => {
-                const name = row.querySelector('.person-name').value.trim();
-                if (!name) return;
-                people.push({
-                    Name: name,
-                    Type: row.querySelector('.person-type').value,
-                    Role: row.querySelector('.person-role').value.trim() || null,
-                    SortOrder: i
-                });
-            });
-
-            return {
-                PathPattern: document.getElementById('ovPath').value,
-                Title: document.getElementById('ovTitle').value || null,
-                Year: document.getElementById('ovYear').value ? parseInt(document.getElementById('ovYear').value) : null,
-                TmdbId: document.getElementById('ovTmdb').value || null,
-                TvdbId: document.getElementById('ovTvdb').value || null,
-                ImdbId: document.getElementById('ovImdb').value || null,
-                Overview: document.getElementById('ovOverview').value || null,
-                OfficialRating: document.getElementById('ovRating').value || null,
-                CommunityRating: document.getElementById('ovCommunityRating').value ? parseFloat(document.getElementById('ovCommunityRating').value) : null,
-                Genres: [...currentGenres],
-                Studios: [...currentStudios],
-                People: people,
-                IsLocked: true
-            };
-        }
-
-        async function saveOverride() {
-            const entry = collectOverrideFromForm();
-            const editId = document.getElementById('editOverrideId').value;
-
-            try {
-                if (editId) {
-                    await fetch(apiBase + '/LibraryImporter/Overrides/' + editId, {
-                        method: 'PUT', headers: apiHeaders(), body: JSON.stringify(entry)
+                    if (libList) libList.innerHTML = '';
+                    var videoTypes = ['movies', 'tvshows', 'homevideos', 'mixed', 'unknown', ''];
+                    serverLibs.filter(function(l) { return videoTypes.indexOf(l.CollectionType) >= 0; }).forEach(function(lib) {
+                        var saved = (config.Libraries || []).find(function(l) { return l.Name === lib.Name; }) || {};
+                        var row = document.createElement('div');
+                        row.className = 'li-lib-row';
+                        row.innerHTML =
+                            '<label><input type="checkbox" class="lib-enabled" data-name="' + lib.Name + '" ' + (saved.Enabled !== false ? 'checked' : '') + ' />' +
+                            '<strong>' + lib.Name + '</strong> (' + lib.CollectionType + ', ' + lib.Paths.length + ' path' + (lib.Paths.length !== 1 ? 's' : '') + ')</label>' +
+                            '<label><input type="checkbox" class="lib-purge" data-name="' + lib.Name + '" ' + (saved.PurgeMissing ? 'checked' : '') + ' /> Purge Missing</label>' +
+                            '<label><input type="checkbox" class="lib-dups" data-name="' + lib.Name + '" ' + (saved.AutoDups ? 'checked' : '') + ' /> Auto Dups</label>';
+                        libList.appendChild(row);
                     });
-                } else {
-                    await fetch(apiBase + '/LibraryImporter/Overrides', {
-                        method: 'POST', headers: apiHeaders(), body: JSON.stringify(entry)
-                    });
+
+                    renderOverrides(config.Overrides || []);
+                } catch(e) {
+                    console.error('Library Importer: loadConfig failed', e);
+                    var el = document.getElementById('libraryList');
+                    if (el) el.innerHTML = '<p style="color:#f88;">Error: ' + e.message + '</p>';
                 }
-                closeOverrideModal();
-                loadConfig();
-            } catch(e) {
-                alert('Failed to save override: ' + e.message);
             }
-        }
 
-        async function editOverride(id) {
-            const config = await ApiClient.getPluginConfiguration('b74b2d8c-2ab3-411f-9631-c5e8270d7e12');
-            const entry = (config.Overrides || []).find(o => o.Id === id);
-            if (entry) showOverrideModal(entry);
-        }
+            async function saveConfig() {
+                var config = await ApiClient.getPluginConfiguration(pluginId);
+                config.TmdbApiKey = document.getElementById('tmdbKey').value;
+                config.TvdbApiKey = document.getElementById('tvdbKey').value;
+                config.DryRun = document.getElementById('dryRun').checked;
 
-        async function deleteOverride(id) {
-            if (!confirm('Delete this override?')) return;
-            try {
-                await fetch(apiBase + '/LibraryImporter/Overrides/' + id, {
-                    method: 'DELETE', headers: apiHeaders()
+                config.Libraries = [];
+                document.querySelectorAll('.lib-enabled').forEach(function(cb) {
+                    var name = cb.dataset.name;
+                    var purge = document.querySelector('.lib-purge[data-name="' + name + '"]');
+                    var dups = document.querySelector('.lib-dups[data-name="' + name + '"]');
+                    config.Libraries.push({
+                        Name: name,
+                        Enabled: cb.checked,
+                        PurgeMissing: purge ? purge.checked : false,
+                        AutoDups: dups ? dups.checked : false
+                    });
                 });
-                loadConfig();
-            } catch(e) {
-                alert('Failed to delete override: ' + e.message);
-            }
-        }
 
-        function showStatus(elementId, msg, type) {
-            const el = document.getElementById(elementId);
-            el.textContent = msg;
-            el.className = 'li-status ' + type;
-            setTimeout(() => { el.className = 'li-status'; }, 3000);
-        }
+                await ApiClient.updatePluginConfiguration(pluginId, config);
+                showStatus('saveStatus', 'Configuration saved.', 'success');
+            }
+
+            function renderOverrides(overrides) {
+                var list = document.getElementById('overrideList');
+                list.innerHTML = '';
+                if (overrides.length === 0) {
+                    list.innerHTML = '<p style="color:#888;">No overrides configured.</p>';
+                    return;
+                }
+                overrides.forEach(function(ov) {
+                    var card = document.createElement('div');
+                    card.className = 'li-override-card';
+                    var genreStr = (ov.Genres || []).join(', ') || 'none';
+                    var peopleArr = (ov.People || []).slice(0, 5).map(function(p) { return p.Name + ' (' + p.Type + ')'; });
+                    var peopleStr = peopleArr.join(', ');
+                    card.innerHTML =
+                        '<div class="li-btn-group">' +
+                        '<button class="li-btn" onclick="editOverride(\'' + ov.Id + '\')">Edit</button> ' +
+                        '<button class="li-btn li-btn-danger" onclick="deleteOverride(\'' + ov.Id + '\')">Delete</button>' +
+                        '</div>' +
+                        '<strong>' + (ov.Title || ov.PathPattern) + '</strong>' +
+                        (ov.Year ? ' (' + ov.Year + ')' : '') +
+                        '<br/><small style="color:#888;">' + ov.PathPattern + '</small>' +
+                        '<br/><small>TMDB: ' + (ov.TmdbId || '-') + ' | TVDB: ' + (ov.TvdbId || '-') + ' | IMDB: ' + (ov.ImdbId || '-') + '</small>' +
+                        '<br/><small>Genres: ' + genreStr + '</small>' +
+                        (peopleStr ? '<br/><small>People: ' + peopleStr + ((ov.People||[]).length > 5 ? '...' : '') + '</small>' : '');
+                    list.appendChild(card);
+                });
+            }
+
+            function showOverrideModal(entry) {
+                document.getElementById('modalTitle').textContent = entry ? 'Edit Override' : 'Add Override';
+                document.getElementById('editOverrideId').value = entry ? entry.Id : '';
+                document.getElementById('ovPath').value = entry ? entry.PathPattern : '';
+                document.getElementById('ovTitle').value = entry ? entry.Title || '' : '';
+                document.getElementById('ovYear').value = entry ? entry.Year || '' : '';
+                document.getElementById('ovRating').value = entry ? entry.OfficialRating || '' : '';
+                document.getElementById('ovTmdb').value = entry ? entry.TmdbId || '' : '';
+                document.getElementById('ovTvdb').value = entry ? entry.TvdbId || '' : '';
+                document.getElementById('ovImdb').value = entry ? entry.ImdbId || '' : '';
+                document.getElementById('ovCommunityRating').value = entry ? entry.CommunityRating || '' : '';
+                document.getElementById('ovOverview').value = entry ? entry.Overview || '' : '';
+
+                currentGenres = entry ? (entry.Genres || []).slice() : [];
+                currentStudios = entry ? (entry.Studios || []).slice() : [];
+                renderChips('genres', currentGenres);
+                renderChips('studios', currentStudios);
+
+                var peopleList = document.getElementById('peopleList');
+                peopleList.innerHTML = '';
+                if (entry && entry.People) {
+                    entry.People.forEach(function(p) { addPersonRow(p); });
+                }
+
+                document.getElementById('overrideModal').classList.add('active');
+            }
+
+            function closeOverrideModal() {
+                document.getElementById('overrideModal').classList.remove('active');
+            }
+
+            function addChip(which) {
+                var inputId = which === 'genres' ? 'genreInput' : 'studioInput';
+                var arr = which === 'genres' ? currentGenres : currentStudios;
+                var val = document.getElementById(inputId).value.trim();
+                if (val && arr.indexOf(val) === -1) {
+                    arr.push(val);
+                    renderChips(which, arr);
+                }
+                document.getElementById(inputId).value = '';
+            }
+
+            function renderChips(containerId, arr) {
+                var container = document.getElementById(containerId);
+                container.innerHTML = '';
+                arr.forEach(function(val, i) {
+                    var chip = document.createElement('span');
+                    chip.className = 'li-chip';
+                    chip.textContent = val + ' ×';
+                    chip.onclick = function() { arr.splice(i, 1); renderChips(containerId, arr); };
+                    container.appendChild(chip);
+                });
+            }
+
+            function addPersonRow(person) {
+                var list = document.getElementById('peopleList');
+                var row = document.createElement('div');
+                row.className = 'li-person-row';
+                row.innerHTML =
+                    '<input type="text" class="person-name" placeholder="Name" value="' + (person ? person.Name : '') + '" />' +
+                    '<select class="person-type">' +
+                    '<option value="Actor"' + (person && person.Type === 'Actor' ? ' selected' : '') + '>Actor</option>' +
+                    '<option value="Director"' + (person && person.Type === 'Director' ? ' selected' : '') + '>Director</option>' +
+                    '<option value="Writer"' + (person && person.Type === 'Writer' ? ' selected' : '') + '>Writer</option>' +
+                    '<option value="Producer"' + (person && person.Type === 'Producer' ? ' selected' : '') + '>Producer</option>' +
+                    '</select>' +
+                    '<input type="text" class="person-role" placeholder="Role/Character" value="' + (person && person.Role ? person.Role : '') + '" />' +
+                    '<button class="li-btn li-btn-danger" onclick="this.parentElement.remove()">×</button>';
+                list.appendChild(row);
+            }
+
+            function collectOverrideFromForm() {
+                var people = [];
+                document.querySelectorAll('#peopleList .li-person-row').forEach(function(row, i) {
+                    var name = row.querySelector('.person-name').value.trim();
+                    if (!name) return;
+                    people.push({
+                        Name: name,
+                        Type: row.querySelector('.person-type').value,
+                        Role: row.querySelector('.person-role').value.trim() || null,
+                        SortOrder: i
+                    });
+                });
+
+                return {
+                    PathPattern: document.getElementById('ovPath').value,
+                    Title: document.getElementById('ovTitle').value || null,
+                    Year: document.getElementById('ovYear').value ? parseInt(document.getElementById('ovYear').value) : null,
+                    TmdbId: document.getElementById('ovTmdb').value || null,
+                    TvdbId: document.getElementById('ovTvdb').value || null,
+                    ImdbId: document.getElementById('ovImdb').value || null,
+                    Overview: document.getElementById('ovOverview').value || null,
+                    OfficialRating: document.getElementById('ovRating').value || null,
+                    CommunityRating: document.getElementById('ovCommunityRating').value ? parseFloat(document.getElementById('ovCommunityRating').value) : null,
+                    Genres: currentGenres.slice(),
+                    Studios: currentStudios.slice(),
+                    People: people,
+                    IsLocked: true
+                };
+            }
+
+            async function saveOverride() {
+                var entry = collectOverrideFromForm();
+                var editId = document.getElementById('editOverrideId').value;
+                var hdrs = { 'X-Emby-Token': ApiClient.accessToken(), 'Content-Type': 'application/json' };
+
+                try {
+                    if (editId) {
+                        await fetch(ApiClient.getUrl('/LibraryImporter/Overrides/' + editId), {
+                            method: 'PUT', headers: hdrs, body: JSON.stringify(entry)
+                        });
+                    } else {
+                        await fetch(ApiClient.getUrl('/LibraryImporter/Overrides'), {
+                            method: 'POST', headers: hdrs, body: JSON.stringify(entry)
+                        });
+                    }
+                    closeOverrideModal();
+                    loadConfig();
+                } catch(e) {
+                    alert('Failed to save override: ' + e.message);
+                }
+            }
+
+            async function editOverride(id) {
+                var config = await ApiClient.getPluginConfiguration(pluginId);
+                var entry = (config.Overrides || []).find(function(o) { return o.Id === id; });
+                if (entry) showOverrideModal(entry);
+            }
+
+            async function deleteOverride(id) {
+                if (!confirm('Delete this override?')) return;
+                try {
+                    await fetch(ApiClient.getUrl('/LibraryImporter/Overrides/' + id), {
+                        method: 'DELETE', headers: { 'X-Emby-Token': ApiClient.accessToken() }
+                    });
+                    loadConfig();
+                } catch(e) {
+                    alert('Failed to delete override: ' + e.message);
+                }
+            }
+
+            function showStatus(elementId, msg, type) {
+                var el = document.getElementById(elementId);
+                el.textContent = msg;
+                el.className = 'li-status ' + type;
+                setTimeout(function() { el.className = 'li-status'; }, 3000);
+            }
+
+        })();
     </script>
+    </div>
 </body>
 </html>
