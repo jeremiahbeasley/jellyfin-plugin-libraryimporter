@@ -1,17 +1,17 @@
 # Jellyfin Library Importer Plugin
 
-Bulk-imports and manages movie/TV metadata directly into Jellyfin's database from disk, TMDB, and TVDB.
+Bulk-imports and repairs movie &amp; TV metadata in Jellyfin from local NFO files, TMDB, and TVDB — on demand or on a schedule.
 
 ## Features
 
-- **Scheduled Scans** — Runs as a Jellyfin scheduled task (daily 3 AM default)
-- **Per-Library Control** — Enable/disable scanning, purge missing items, resolve duplicates per library
-- **Metadata Resolution Chain** — NFO files → TMDB → TVDB fallback
-- **Custom Overrides** — Add/edit/delete metadata overrides via the web UI (title, genres, studios, people, etc.)
-- **Deterministic IDs** — Generates Jellyfin-compatible item IDs from file paths
-- **Direct DB Writes** — Updates SQLite database via WAL mode (no service restart needed during scan)
-- **Poster Downloads** — Automatically fetches posters from TMDB when local images are missing
-- **Orphan Purging** — Removes database entries for items no longer on disk
+- **On-demand or scheduled** — Run instantly from the plugin page with **Run Now** (with live progress), or let the daily scheduled task (3 AM default) handle it.
+- **Movies &amp; TV** — Full Series → Season → Episode hierarchy, including per-episode titles and overviews.
+- **Metadata resolution chain** — NFO files → TMDB → TVDB fallback, for both movies and series.
+- **Native Jellyfin integration** — Writes through Jellyfin's library API (`ILibraryManager`), **not raw SQL**, so items, cast &amp; crew, genres, studios, images, and provider IDs all appear correctly and keep working across Jellyfin versions.
+- **Custom overrides** — Pin exact metadata for specific titles from the web UI: title, sort/original title, year, premiere date, runtime, TMDB/TVDB/IMDB IDs, rating, genres, studios, and cast. Overrides take priority over NFO files and API lookups.
+- **Posters** — Local artwork is used when present; otherwise a poster is fetched from TMDB.
+- **Purge missing** — Optionally remove library items whose files no longer exist (per library; never deletes your media).
+- **Theme-aware UI** — The config page adapts to your Jellyfin theme (light or dark) and is keyboard/remote friendly.
 
 ## Installation
 
@@ -32,11 +32,10 @@ Bulk-imports and manages movie/TV metadata directly into Jellyfin's database fro
 
 After installation, go to **Dashboard → Plugins → Library Importer**:
 
-1. Enter your **TMDB API Key** (required) and optionally a **TVDB API Key**
-2. Click **Load Libraries** to see your Jellyfin libraries
-3. Enable the libraries you want to scan
-4. Add any custom overrides for items that need manual metadata
-5. Save and run the scheduled task or wait for the next scheduled scan
+1. Enter your **TMDB API key** (required) and optionally a **TVDB API key**.
+2. In the **Libraries** table, toggle which libraries to **Import** (and optionally **Purge** missing items).
+3. Optionally add **Custom Overrides** for titles that need hand-corrected metadata.
+4. **Save configuration**, then click **Run Now** — or wait for the nightly scheduled scan.
 
 ## Building from Source
 
@@ -48,8 +47,8 @@ The plugin DLL will be at `bin/Release/net9.0/Jellyfin.Plugin.LibraryImporter.dl
 
 ## Requirements
 
-- Jellyfin Server 10.11.x+
-- .NET 9.0 runtime (included with Jellyfin)
+- Jellyfin Server 10.11.x
+- .NET 9.0 (bundled with Jellyfin 10.11)
 
 ## License
 
