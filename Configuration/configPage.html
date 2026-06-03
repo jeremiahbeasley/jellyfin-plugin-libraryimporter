@@ -14,26 +14,26 @@
            against an unknown skin). Matches Jellyfin's default dark look.
            ============================================================ */
         #LibraryImporterConfigPage {
-            /* surfaces — same hue, lightness-only shifts */
-            --li-surface:      rgba(255,255,255,.04);
-            --li-surface-2:    rgba(255,255,255,.07);
-            --li-inset:        rgba(0,0,0,.28);
-            /* borders — progression from soft to strong */
-            --li-border-soft:  rgba(255,255,255,.07);
-            --li-border:       rgba(255,255,255,.13);
-            --li-border-strong:rgba(255,255,255,.24);
-            /* text — four levels */
-            --li-text:         rgba(255,255,255,.96);
-            --li-text-2:       rgba(255,255,255,.80);
-            --li-text-3:       rgba(255,255,255,.62);
-            --li-text-on-accent:#06151c;
-            /* meaning */
-            --li-accent:       #00a4dc;   /* Jellyfin teal — primary action */
-            --li-accent-hi:    #33b7e6;
-            --li-beam:         #ffb300;   /* projector beam — running + focus */
-            --li-ok:           #5cc66a;   /* imported / complete */
-            --li-danger:       #e2574e;   /* purge / delete */
-            --li-danger-bg:    #c62f27;
+            /* Theme-adaptive: inherit Jellyfin's text color, build surfaces/borders
+               from NEUTRAL translucent grey (darkens on light themes, lightens on
+               dark), and pick up Jellyfin's real accent at runtime (see JS). */
+            --li-surface:      rgba(127,127,127,.10);
+            --li-surface-2:    rgba(127,127,127,.16);
+            --li-inset:        rgba(127,127,127,.14);
+            --li-border-soft:  rgba(127,127,127,.18);
+            --li-border:       rgba(127,127,127,.32);
+            --li-border-strong:rgba(127,127,127,.5);
+            /* text hierarchy via the inherited colour, dimmed — works light or dark */
+            --li-text:         inherit;
+            --li-text-2:       color-mix(in srgb, currentColor 72%, transparent);
+            --li-text-3:       color-mix(in srgb, currentColor 52%, transparent);
+            --li-text-on-accent:#fff;        /* white on accent, as Jellyfin does */
+            /* meaning — --li-accent is overwritten from Jellyfin's .button-submit at load */
+            --li-accent:       #00a4dc;
+            --li-beam:         #ffb300;       /* projector beam — running lamp + focus */
+            --li-ok:           #4caf50;
+            --li-danger:       #e2574e;
+            --li-danger-bg:    #d9342c;
             /* shape + rhythm */
             --li-r-sm: 4px; --li-r-md: 8px; --li-r-lg: 14px;
             --li-s1: 4px; --li-s2: 8px; --li-s3: 16px; --li-s4: 24px; --li-s5: 32px;
@@ -211,7 +211,8 @@
         }
         #LibraryImporterConfigPage .li-switch-thumb {
             position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; border-radius: 50%;
-            background: var(--li-text-2); transition: transform .15s ease, background .15s ease;
+            background: var(--li-text-2); box-shadow: 0 1px 2px rgba(0,0,0,.35);
+            transition: transform .15s ease, background .15s ease;
         }
         #LibraryImporterConfigPage .li-switch input:checked + .li-switch-track {
             background: var(--li-accent); border-color: var(--li-accent);
@@ -241,7 +242,7 @@
         #LibraryImporterConfigPage .li-btn-primary {
             background: var(--li-accent); border-color: var(--li-accent); color: var(--li-text-on-accent);
         }
-        #LibraryImporterConfigPage .li-btn-primary:hover { background: var(--li-accent-hi); border-color: var(--li-accent-hi); }
+        #LibraryImporterConfigPage .li-btn-primary:hover { filter: brightness(1.12); }
         #LibraryImporterConfigPage .li-btn-danger {
             background: var(--li-danger-bg); border-color: var(--li-danger-bg); color: #fff;
         }
@@ -511,8 +512,25 @@
                 if (e.key === 'Escape' && $('overrideModal').classList.contains('active')) closeOverrideModal();
             });
 
+            applyThemeAccent();
             loadConfig();
             refreshRunState();
+
+            // Match Jellyfin's real accent: themes set .button-submit's background
+            // directly (no CSS var), so read the computed colour and bind it.
+            function applyThemeAccent() {
+                try {
+                    var probe = document.createElement('button');
+                    probe.className = 'button-submit';
+                    probe.style.cssText = 'position:absolute;left:-9999px;visibility:hidden';
+                    document.body.appendChild(probe);
+                    var bg = getComputedStyle(probe).backgroundColor;
+                    probe.remove();
+                    if (bg && bg !== 'rgba(0, 0, 0, 0)' && bg !== 'transparent') {
+                        document.getElementById('LibraryImporterConfigPage').style.setProperty('--li-accent', bg);
+                    }
+                } catch (e) { /* keep fallback accent */ }
+            }
 
             // =================== CONFIG ===================
             async function loadConfig() {
