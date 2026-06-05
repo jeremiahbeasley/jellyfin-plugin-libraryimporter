@@ -96,6 +96,117 @@ public static partial class DiskScanner
         return results.OrderBy(e => e.Item3).ToList();
     }
 
+    private static readonly HashSet<string> AudiobookExtensions = [".m4b", ".mp3", ".m4a", ".flac", ".ogg", ".opus"];
+    private static readonly HashSet<string> EbookExtensions = [".epub", ".pdf", ".azw3", ".mobi", ".cbz", ".cbr"];
+
+    public record BookFolder(
+        string Dir,
+        string Author,
+        string CleanName,
+        List<string> AudioFiles,
+        List<string> EbookFiles,
+        List<string> OpfFiles,
+        string? AbsJsonFile,
+        string? CoverFile,
+        string? PlaylistFile);
+
+    /// <summary>
+    /// Finds book folders (audiobooks and/or ebooks) under Author/[Series/]Book layouts.
+    /// A "book folder" is any directory directly containing audio or ebook files, up to
+    /// three levels below the library root. LazyLibrarian's " (1234)" book-id suffix is
+    /// stripped for the clean name, and duplicate copies of the same book (same author +
+    /// clean name) are collapsed to the best candidate (most metadata, then most files).
+    /// </summary>
+    public static List<BookFolder> ScanBooks(List<string> libraryPaths)
+    {
+        var byKey = new Dictionary<string, BookFolder>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var basePath in libraryPaths)
+        {
+            if (!Directory.Exists(basePath)) continue;
+
+            foreach (var authorDir in Directory.EnumerateDirectories(basePath))
+            {
+                var author = Path.GetFileName(authorDir);
+                if (author.StartsWith('.') || author.StartsWith('$')
+                    || author.Equals("lost+found", StringComparison.OrdinalIgnoreCase)) continue;
+
+                CollectBookDirs(authorDir, author, depth: 0, byKey);
+            }
+        }
+
+        return byKey.Values.ToList();
+    }
+
+    private static void CollectBookDirs(string dir, string author, int depth, Dictionary<string, BookFolder> byKey)
+    {
+        foreach (var sub in Directory.EnumerateDirectories(dir))
+        {
+            var name = Path.GetFileName(sub);
+            if (name.StartsWith('.') || name.StartsWith('$')) continue;
+
+            var book = ProbeBookDir(sub, author);
+            if (book is not null)
+            {
+                var key = $"{author}|{book.CleanName}";
+                if (!byKey.TryGetValue(key, out var existing) || Better(book, existing))
+                    byKey[key] = book;
+            }
+
+            // Recurse regardless — a series dir can hold loose files AND book subdirs
+            // (Author/Series/Book layouts), so probing and descending are not exclusive.
+            if (depth < 2)
+                CollectBookDirs(sub, author, depth + 1, byKey);
+        }
+    }
+
+    private static BookFolder? ProbeBookDir(string dir, string author)
+    {
+        List<string> audio = [], ebook = [], opf = [];
+        string? absJson = null, cover = null, anyImage = null, playlist = null;
+
+        foreach (var file in Directory.EnumerateFiles(dir))
+        {
+            var ext = Path.GetExtension(file).ToLowerInvariant();
+            var fileName = Path.GetFileName(file);
+            if (AudiobookExtensions.Contains(ext)) audio.Add(file);
+            else if (EbookExtensions.Contains(ext)) ebook.Add(file);
+            else if (ext == ".opf") opf.Add(file);
+            else if (fileName.Equals("metadata.json", StringComparison.OrdinalIgnoreCase)) absJson = file;
+            else if (fileName.Equals("cover.jpg", StringComparison.OrdinalIgnoreCase)
+                  || fileName.Equals("cover.png", StringComparison.OrdinalIgnoreCase)) cover = file;
+            else if (ext is ".jpg" or ".jpeg" or ".png") anyImage ??= file;
+            else if (ext == ".ll") playlist = file;
+        }
+
+        // LazyLibrarian-style folders name the art "<Title> - <Author>.jpg" instead of
+        // cover.jpg — any image in the folder is better than none.
+        cover ??= anyImage;
+
+        if (audio.Count == 0 && ebook.Count == 0) return null;
+
+        audio.Sort(StringComparer.OrdinalIgnoreCase);
+        ebook.Sort(StringComparer.OrdinalIgnoreCase);
+        // metadata.opf (the canonical sidecar) first when several OPFs exist
+        opf.Sort((a, b) =>
+            Path.GetFileName(b).Equals("metadata.opf", StringComparison.OrdinalIgnoreCase)
+                .CompareTo(Path.GetFileName(a).Equals("metadata.opf", StringComparison.OrdinalIgnoreCase)));
+
+        return new BookFolder(dir, author, CleanBookName(Path.GetFileName(dir)),
+            audio, ebook, opf, absJson, cover, playlist);
+    }
+
+    private static bool Better(BookFolder a, BookFolder b) =>
+        (a.OpfFiles.Count + (a.AbsJsonFile is null ? 0 : 1), a.AudioFiles.Count + a.EbookFiles.Count)
+            .CompareTo((b.OpfFiles.Count + (b.AbsJsonFile is null ? 0 : 1), b.AudioFiles.Count + b.EbookFiles.Count)) > 0;
+
+    /// <summary>Strips LazyLibrarian's trailing " (1234)" book-id suffix.</summary>
+    public static string CleanBookName(string folderName) =>
+        LazyLibrarianIdRegex().Replace(folderName, "").Trim();
+
+    [GeneratedRegex(@"\s*\(\d{1,6}\)\s*$")]
+    private static partial Regex LazyLibrarianIdRegex();
+
     public static int ExtractSeasonNumber(string folderName)
     {
         var lower = folderName.ToLowerInvariant().Trim();

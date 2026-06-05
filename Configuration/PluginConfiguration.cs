@@ -7,6 +7,9 @@ public class LibraryConfig
     public string Name { get; set; } = string.Empty;
     public bool Enabled { get; set; } = true;
     public bool PurgeMissing { get; set; }
+
+    /// <summary>One-shot: bypass the skip fast-path on the next run, then auto-clear.</summary>
+    public bool ForceReimport { get; set; }
 }
 
 public class RunSummary
@@ -28,6 +31,10 @@ public class PluginConfiguration : BasePluginConfiguration
 {
     public string TmdbApiKey { get; set; } = string.Empty;
     public string TvdbApiKey { get; set; } = string.Empty;
+
+    /// <summary>Optional Audiobookshelf server URL; with <see cref="AbsApiKey"/> set, audiobook metadata comes from ABS first.</summary>
+    public string AbsUrl { get; set; } = string.Empty;
+    public string AbsApiKey { get; set; } = string.Empty;
     public List<LibraryConfig> Libraries { get; set; } = [];
     public List<Models.OverrideEntry> Overrides { get; set; } = [];
     public bool DryRun { get; set; }

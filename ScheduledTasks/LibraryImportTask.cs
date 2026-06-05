@@ -59,11 +59,23 @@ public class LibraryImportTask : IScheduledTask
             DryRun = config.DryRun,
         };
 
+        // Names of libraries whose one-shot ForceReimport was consumed this run.
+        var consumedForce = new List<string>();
+
         void SaveSummary(string status)
         {
             summary.Status = status;
             summary.FinishedUtc = DateTime.UtcNow.ToString("o");
-            config.LastRun = summary;
+
+            // The config page may replace the plugin's Configuration instance mid-run
+            // (UpdatePluginConfiguration swaps in a new object). Mutating our start-of-run
+            // snapshot would be silently discarded — always write results to the CURRENT
+            // instance at save time.
+            var current = plugin.Configuration;
+            current.LastRun = summary;
+            foreach (var lib in current.Libraries)
+                if (lib.ForceReimport && consumedForce.Contains(lib.Name))
+                    lib.ForceReimport = false;
             plugin.SaveConfiguration();
         }
 
@@ -87,8 +99,18 @@ public class LibraryImportTask : IScheduledTask
         // scan (observed ~3 min per stuck show). Cap each request so a slow lookup fails fast
         // and the scan moves on instead of crawling.
         httpClient.Timeout = TimeSpan.FromSeconds(30);
+        httpClient.DefaultRequestHeaders.UserAgent.ParseAdd("JellyfinLibraryImporter/1.0");
         var tmdb = new TmdbClient(httpClient, config.TmdbApiKey, _logger);
         var tvdb = new TvdbClient(httpClient, config.TvdbApiKey, _logger);
+        var audnexus = new AudnexusClient(httpClient, _logger);
+        var openLibrary = new OpenLibraryClient(httpClient, _logger);
+
+        // Audiobookshelf opt-in: only when both URL and token are configured; loaded lazily
+        // on the first books library so non-book runs never touch it.
+        AudiobookshelfClient? abs = null;
+        var absLoaded = false;
+        if (!string.IsNullOrWhiteSpace(config.AbsUrl) && !string.IsNullOrWhiteSpace(config.AbsApiKey))
+            abs = new AudiobookshelfClient(httpClient, config.AbsUrl, config.AbsApiKey, _logger);
 
         var engine = new ImportEngine(_libraryManager, _itemRepository, tmdb, tvdb, config, _logger);
 
@@ -121,6 +143,17 @@ public class LibraryImportTask : IScheduledTask
                 result = await engine.ImportTvAsync(libConfig.Name, paths, subProgress, ct)
                     .ConfigureAwait(false);
             }
+            else if (contentType is "books")
+            {
+                if (abs is not null && !absLoaded)
+                {
+                    absLoaded = true;
+                    if (!await abs.LoadAsync(ct).ConfigureAwait(false)) abs = null;
+                }
+
+                result = await engine.ImportBooksAsync(libConfig.Name, paths, abs, audnexus, openLibrary, subProgress, ct)
+                    .ConfigureAwait(false);
+            }
             else
             {
                 result = await engine.ImportMoviesAsync(libConfig.Name, paths, subProgress, ct)
@@ -138,6 +171,12 @@ public class LibraryImportTask : IScheduledTask
             summary.Purged += result.Purged;
             summary.PostersDownloaded += result.PostersDownloaded;
             summary.LibrariesProcessed++;
+
+            // Force re-import is one-shot: record consumption; the flag is cleared on the
+            // CURRENT config instance at save time (see SaveSummary) to survive mid-run
+            // config edits from the UI.
+            if (libConfig.ForceReimport)
+                consumedForce.Add(libConfig.Name);
 
             completedLibraries++;
         }

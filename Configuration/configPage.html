@@ -187,7 +187,7 @@
             border: 1px solid var(--li-border-soft); border-radius: var(--li-r-md); overflow: hidden;
         }
         #LibraryImporterConfigPage .li-librow {
-            display: grid; grid-template-columns: minmax(0, 1fr) 96px 96px;
+            display: grid; grid-template-columns: minmax(0, 1fr) 96px 96px 96px;
             align-items: center; gap: var(--li-s2);
             padding: var(--li-s2) var(--li-s3);
             border-bottom: 1px solid var(--li-border-soft);
@@ -203,7 +203,7 @@
         #LibraryImporterConfigPage .li-lib-name { font-weight: 600; }
         #LibraryImporterConfigPage .li-lib-sub { color: var(--li-text-3); font-size: .85em; margin-top: .1em; }
         @media (max-width: 600px) {
-            #LibraryImporterConfigPage .li-librow { grid-template-columns: minmax(0, 1fr) 60px 60px; }
+            #LibraryImporterConfigPage .li-librow { grid-template-columns: minmax(0, 1fr) 60px 60px 60px; }
             #LibraryImporterConfigPage .li-libhead { font-size: .68em; }
         }
 
@@ -424,6 +424,26 @@
                                 </div>
                                 <span class="li-hint" id="tvdbHint">Fallback when TMDB has no match.</span>
                             </div>
+                            <div class="li-field">
+                                <label for="absUrl">Audiobookshelf URL <span aria-hidden="true">·</span> optional</label>
+                                <input id="absUrl" type="text" autocomplete="off" spellcheck="false"
+                                       placeholder="http://192.168.1.10:13378" aria-describedby="absHint" />
+                                <span class="li-hint" id="absHint">With a URL and API key set, audiobook metadata comes
+                                    from your Audiobookshelf server first. Otherwise folder metadata
+                                    (metadata.json / OPF) is used, then online sources.</span>
+                            </div>
+                            <div class="li-field">
+                                <label for="absKey">Audiobookshelf API key <span aria-hidden="true">·</span> optional</label>
+                                <div class="li-keyrow">
+                                    <input id="absKey" type="password" autocomplete="off" spellcheck="false"
+                                           aria-describedby="absKeyHint" />
+                                    <button type="button" class="li-btn li-key-toggle" data-target="absKey"
+                                            aria-label="Show ABS API key" aria-pressed="false">Show</button>
+                                    <button type="button" class="li-btn li-key-copy" data-target="absKey"
+                                            aria-label="Copy ABS API key">Copy</button>
+                                </div>
+                                <span class="li-hint" id="absKeyHint">Settings → Users → API token in Audiobookshelf.</span>
+                            </div>
                             <span class="li-sr" id="liKeyLive" aria-live="polite"></span>
                         </div>
                         <div class="li-field" style="margin-bottom:0;">
@@ -441,6 +461,8 @@
                             <span class="li-hint-line"><strong>Import</strong> — include this library in manual and scheduled scans.</span>
                             <span class="li-hint-line"><strong>Purge</strong> — after a scan, remove items from Jellyfin's database when their
                             files no longer exist on disk. Your media files are never touched.</span>
+                            <span class="li-hint-line"><strong>Force</strong> — re-import everything in this library on the
+                            next run, even items that look complete. Switches itself off after that run.</span>
                         </p>
                         <div id="libraryList" aria-live="polite"></div>
                     </section>
@@ -624,6 +646,8 @@
                     var config = await ApiClient.getPluginConfiguration(pluginId);
                     $('tmdbKey').value = config.TmdbApiKey || '';
                     $('tvdbKey').value = config.TvdbApiKey || '';
+                    $('absUrl').value = config.AbsUrl || '';
+                    $('absKey').value = config.AbsApiKey || '';
                     $('dryRun').checked = config.DryRun || false;
 
                     var serverLibs = [];
@@ -637,10 +661,10 @@
                         return;
                     }
 
-                    var videoTypes = ['movies', 'tvshows', 'homevideos', 'mixed', 'unknown', ''];
-                    var shown = serverLibs.filter(function (l) { return videoTypes.indexOf(l.CollectionType) >= 0; });
+                    var supportedTypes = ['movies', 'tvshows', 'books', 'homevideos', 'mixed', 'unknown', ''];
+                    var shown = serverLibs.filter(function (l) { return supportedTypes.indexOf(l.CollectionType) >= 0; });
                     if (!shown.length) {
-                        libList.innerHTML = '<p class="li-empty">No movie or TV libraries found.</p>';
+                        libList.innerHTML = '<p class="li-empty">No supported libraries found.</p>';
                     } else {
                         libList.innerHTML =
                             '<div class="li-libtable" role="table" aria-label="Libraries">' +
@@ -648,6 +672,7 @@
                                 '<span role="columnheader">Library</span>' +
                                 '<span role="columnheader">Import</span>' +
                                 '<span role="columnheader">Purge</span>' +
+                                '<span role="columnheader">Force</span>' +
                               '</div>' +
                             '</div>';
                         var table = libList.querySelector('.li-libtable');
@@ -664,7 +689,8 @@
                                   '<div class="li-lib-sub">' + esc(lib.CollectionType || 'unknown') + ' · ' + paths + ' path' + (paths !== 1 ? 's' : '') + '</div>' +
                                 '</div>' +
                                 '<div role="cell">' + toggle('lib-enabled', n, saved.Enabled !== false, 'Import') + '</div>' +
-                                '<div role="cell">' + toggle('lib-purge', n, !!saved.PurgeMissing, 'Purge missing') + '</div>';
+                                '<div role="cell">' + toggle('lib-purge', n, !!saved.PurgeMissing, 'Purge missing') + '</div>' +
+                                '<div role="cell">' + toggle('lib-force', n, !!saved.ForceReimport, 'Force re-import once') + '</div>';
                             table.appendChild(row);
                         });
                     }
@@ -688,15 +714,30 @@
                 var config = await ApiClient.getPluginConfiguration(pluginId);
                 config.TmdbApiKey = $('tmdbKey').value;
                 config.TvdbApiKey = $('tvdbKey').value;
+                config.AbsUrl = $('absUrl').value.trim();
+                config.AbsApiKey = $('absKey').value;
                 config.DryRun = $('dryRun').checked;
+                // Rebuild from rendered rows, but PRESERVE config entries for
+                // libraries not currently rendered (e.g. a library temporarily
+                // missing from Jellyfin) — previously they were silently dropped.
+                var previousLibs = config.Libraries || [];
+                var renderedNames = {};
                 config.Libraries = [];
                 document.querySelectorAll('.lib-enabled').forEach(function (cb) {
                     var name = cb.dataset.name;
+                    renderedNames[name] = true;
                     var purge = document.querySelector('.lib-purge[data-name="' + cssAttr(name) + '"]');
+                    var force = document.querySelector('.lib-force[data-name="' + cssAttr(name) + '"]');
                     config.Libraries.push({
                         Name: name, Enabled: cb.checked,
-                        PurgeMissing: purge ? purge.checked : false
+                        PurgeMissing: purge ? purge.checked : false,
+                        ForceReimport: force ? force.checked : false
                     });
+                });
+                previousLibs.forEach(function (l) {
+                    if (l && l.Name && !renderedNames[l.Name]) {
+                        config.Libraries.push(l);
+                    }
                 });
                 await ApiClient.updatePluginConfiguration(pluginId, config);
                 showStatus('saveStatus', 'Configuration saved.', 'success');
